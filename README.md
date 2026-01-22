@@ -15,62 +15,17 @@ whisper> kill that process
 → kill 12345
 ```
 
-Built for engineers who think in intentions, not incantations. With multi-tier safety guardrails, comprehensive audit logs, and intelligent risk classification, Whisper executes safe commands automatically while protecting you from dangerous operations.
-
-**Your terminal. Your language. Zero memorization.**
+Safe commands run automatically. Risky ones ask first.
 
 ---
 
 ## Features
 
-- 🗣️ **Natural Language Interface**: Type what you want, not memorize syntax
-- 🛡️ **Multi-Tier Safety System**: Three-level risk classification (SAFE, CAUTION, DANGEROUS)
-- ⚡ **Smart Auto-Execution**: Safe read-only commands run automatically
-- 🔒 **Confirmation Gates**: Risky operations require explicit approval
-- 📝 **Complete Audit Log**: Every command logged to JSONL for accountability
-- 🚫 **Dangerous Command Blocking**: sudo, rm -rf, and other destructive commands blocked unless armed
-- 🔄 **Retry Logic**: 3-tier LLM fallback for reliable command generation
-- 🎯 **Context-Aware**: Understands your environment (OS, shell, working directory)
-- 💬 **Conversation History**: Maintains context for follow-up questions (last 10 exchanges)
-- ⌨️ **Tab Autocomplete**: File path and meta command completion
-- 🎨 **Rich Terminal UI**: Color-coded risk badges, framed output, animated startup
-- 🚀 **Direct Command Execution**: Type shell commands directly to skip LLM overhead
-- 🔍 **Interactive History**: Browse and search command history with arrow keys
-
-## Installation
-
-### Prerequisites
-
-- [Bun](https://bun.sh/) v1.0.0 or later
-- macOS or Linux (Windows not currently supported)
-- [OpenRouter API key](https://openrouter.ai/) (free tier available)
-
-### Install via npm (Recommended)
-
-```bash
-npm install -g @shahidrogers/whisper-cli
-```
-
-That's it! Now you can run `whisper` from any directory.
-
-**Note**: While the npm package name is `@shahidrogers/whisper-cli`, the command you run is simply `whisper`.
-
-### Install from Source
-
-If you want to install from source:
-
-```bash
-# Clone and install
-git clone https://github.com/shahidrogers/whisper-cli
-cd whisper-cli
-./install.sh
-```
-
-### Uninstall
-
-```bash
-npm uninstall -g @shahidrogers/whisper-cli
-```
+- 🗣️ **Natural Language Interface**: Type what you want in plain English
+- ⚡ **Smart & Safe**: Auto-runs safe commands, asks before anything risky
+- 💬 **Remembers Context**: Ask follow-up questions naturally
+- 🎨 **Beautiful Terminal UI**: Clean, color-coded output
+- 🚀 **Works Both Ways**: Use natural language OR type shell commands directly
 
 ## Quick Start
 

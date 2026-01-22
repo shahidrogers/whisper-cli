@@ -5012,10 +5012,10 @@ var colors = {
   yellow: "\x1B[33m",
   blue: "\x1B[34m",
   magenta: "\x1B[35m",
-  cyan: "\x1B[36m",
+  cyan: "\x1B[38;5;214m",
   orange: "\x1B[38;5;214m",
   slate: "\x1B[38;5;245m",
-  accent: "\x1B[38;5;81m"
+  accent: "\x1B[38;5;214m"
 };
 var ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
 function visibleLength(text) {
@@ -5047,6 +5047,18 @@ function wrapWords(text, width) {
   if (current)
     lines.push(current);
   return lines.length > 0 ? lines : [""];
+}
+function enterAltScreen(stdout) {
+  if (!stdout.isTTY)
+    return false;
+  const term = process.env.TERM ?? "";
+  if (!term || term === "dumb")
+    return false;
+  stdout.write("\x1B[?1049h\x1B[?1047h\x1B[?47h\x1B[?25l");
+  return true;
+}
+function exitAltScreen(stdout) {
+  stdout.write("\x1B[?25h\x1B[?47l\x1B[?1047l\x1B[?1049l");
 }
 function getRiskBadge(risk) {
   switch (risk) {
@@ -5115,11 +5127,15 @@ ${borderColor}\u256D${colors.reset}${headerText}${borderColor}${"\u2500".repeat(
   console.log(`${borderColor}\u2570${"\u2500".repeat(width - 2)}\u256F${colors.reset}
 `);
 }
-function showOutputSeparator(label = "Output") {
+function showOutputHeader(label = "Output") {
   const width = getTerminalWidth();
   const labelText = ` ${label} `;
-  const dashCount = Math.max(0, width - labelText.length);
-  console.log(`${colors.dim}${labelText}${"\u2500".repeat(dashCount)}${colors.reset}`);
+  const dashCount = Math.max(0, width - visibleLength(labelText) - 3);
+  console.log(`${colors.dim}\u256D\u2500${labelText}${"\u2500".repeat(dashCount)}\u256E${colors.reset}`);
+}
+function showOutputFooter() {
+  const width = getTerminalWidth();
+  console.log(`${colors.dim}\u2570${"\u2500".repeat(width - 2)}\u256F${colors.reset}`);
 }
 async function showWhisperAsciiArt() {
   const art = [
@@ -5132,8 +5148,8 @@ async function showWhisperAsciiArt() {
     "  \u255A\u2550\u2550\u255D\u255A\u2550\u2550\u255D \u255A\u2550\u255D  \u255A\u2550\u255D\u255A\u2550\u255D\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u255D\u255A\u2550\u255D     \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u255D\u255A\u2550\u255D  \u255A\u2550\u255D",
     "                                                      "
   ];
-  const frames = 20;
-  const delay = 30;
+  const frames = 8;
+  const delay = 12;
   process.stdout.write("\x1B[2J\x1B[0f");
   for (let frame = 0;frame <= frames; frame++) {
     const opacity = frame / frames;
@@ -5172,7 +5188,7 @@ async function showWhisperAsciiArt() {
     }
     console.log(coloredLine);
   }
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 120));
 }
 function buildPrompt(state) {
   const cwd = process.cwd();
@@ -5257,6 +5273,7 @@ async function showHistoryInteractive(rl) {
   let showingDetails = false;
   const stdin = process.stdin;
   const stdout = process.stdout;
+  const useAltScreen = enterAltScreen(stdout);
   const filterEntries = (query) => {
     if (!query)
       return allEntries;
@@ -5324,7 +5341,11 @@ ${colors.dim}Press any key to go back...${colors.reset}`);
       if (stdin.isTTY) {
         stdin.setRawMode(false);
       }
-      stdout.write("\x1B[2J\x1B[H");
+      if (useAltScreen) {
+        exitAltScreen(stdout);
+      } else {
+        stdout.write("\x1B[2J\x1B[H");
+      }
     }
     function finish() {
       cleanup();
@@ -5394,22 +5415,36 @@ async function promptModelSelection(state, rl) {
   let index = Math.max(0, models.findIndex((model) => model.id === state.config.selected_model));
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const render = () => {
+  const useAltScreen = enterAltScreen(stdout);
+  const formatModelLine = (model, isSelected) => {
+    const marker = isSelected ? "\u2192" : " ";
+    const recommended = model.recommended ? ` ${colors.green}\u2605${colors.reset}` : "";
+    const lineColor = isSelected ? colors.accent : "";
+    const price = model.pricePer1MTokens === 0 ? "free" : `$${model.pricePer1MTokens}/1M`;
+    return `${lineColor}${marker} ${model.name}${recommended}${colors.reset} ${colors.dim}\xB7 ${model.speed} \xB7 ${price}${colors.reset}`;
+  };
+  const listStartRow = 3;
+  const renderInitial = () => {
     stdout.write("\x1B[2J\x1B[H");
-    console.log(`${colors.bold}Select a model:${colors.reset}`);
-    console.log(`${colors.dim}Use \u2191/\u2193 to move, Enter to select, Esc to cancel${colors.reset}
+    stdout.write(`${colors.bold}Select a model:${colors.reset}
+`);
+    stdout.write(`${colors.dim}Use \u2191/\u2193 to move, Enter to select, Esc to cancel${colors.reset}
+
 `);
     for (let i = 0;i < models.length; i += 1) {
-      const model = models[i];
-      const isSelected = i === index;
-      const marker = isSelected ? "\u2192" : " ";
-      const recommended = model.recommended ? ` ${colors.green}\u2605${colors.reset}` : "";
-      const lineColor = isSelected ? colors.cyan : "";
-      const reset = isSelected ? colors.reset : "";
-      const price = model.pricePer1MTokens === 0 ? "free" : `$${model.pricePer1MTokens}/1M`;
-      console.log(`${lineColor}${marker} ${model.name}${recommended}${reset} ${colors.dim}\xB7 ${model.speed} \xB7 ${price}${reset}`);
+      stdout.write(formatModelLine(models[i], i === index) + `
+`);
     }
-    console.log();
+    stdout.write(`
+`);
+  };
+  const redrawLine = (lineIndex, isSelected) => {
+    if (lineIndex < 0 || lineIndex >= models.length)
+      return;
+    readline.cursorTo(stdout, 0, listStartRow + lineIndex);
+    readline.clearLine(stdout, 0);
+    stdout.write(formatModelLine(models[lineIndex], isSelected));
+    readline.cursorTo(stdout, 0, listStartRow + models.length + 1);
   };
   const selected = await new Promise((resolve) => {
     function cleanup() {
@@ -5417,7 +5452,11 @@ async function promptModelSelection(state, rl) {
       if (stdin.isTTY) {
         stdin.setRawMode(false);
       }
-      stdout.write("\x1B[2J\x1B[H");
+      if (useAltScreen) {
+        exitAltScreen(stdout);
+      } else {
+        stdout.write("\x1B[2J\x1B[H");
+      }
     }
     function finish(value) {
       cleanup();
@@ -5425,13 +5464,17 @@ async function promptModelSelection(state, rl) {
     }
     const onKeypress = (_str, key) => {
       if (key?.name === "up") {
+        const prevIndex = index;
         index = (index - 1 + models.length) % models.length;
-        render();
+        redrawLine(prevIndex, false);
+        redrawLine(index, true);
         return;
       }
       if (key?.name === "down") {
+        const prevIndex = index;
         index = (index + 1) % models.length;
-        render();
+        redrawLine(prevIndex, false);
+        redrawLine(index, true);
         return;
       }
       if (key?.name === "return") {
@@ -5447,7 +5490,7 @@ async function promptModelSelection(state, rl) {
       stdin.setRawMode(true);
     }
     stdin.on("keypress", onKeypress);
-    render();
+    renderInitial();
   });
   if (!selected) {
     console.log(`${colors.yellow}Cancelled${colors.reset}
@@ -5613,32 +5656,27 @@ function getPathCompletions(partial) {
 async function readLineWithAutocomplete(prompt, rl) {
   return new Promise((resolve) => {
     let input = "";
+    let originalInput = "";
     let selectedIndex = -1;
     let suggestions = [];
     let pathCompletions = [];
-    let lastDrawnSuggestions = 0;
     let completionMode = null;
+    let suggestionsVisible = false;
     const stdin = process.stdin;
     const stdout = process.stdout;
     stdout.write(prompt);
     const redraw = () => {
-      const inputEndCol = prompt.length + input.length;
-      if (lastDrawnSuggestions > 0) {
-        readline.moveCursor(stdout, 0, 1);
-        for (let i = 0;i < lastDrawnSuggestions; i++) {
-          readline.clearLine(stdout, 0);
-          if (i < lastDrawnSuggestions - 1) {
-            readline.moveCursor(stdout, 0, 1);
-          }
-        }
-        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        readline.cursorTo(stdout, 0);
-      } else {
-        readline.cursorTo(stdout, 0);
+      if (stdin.isTTY) {
+        stdin.setRawMode(false);
       }
-      readline.clearLine(stdout, 0);
+      stdout.write("\r");
+      stdout.write("\x1B[K");
+      stdout.write("\x1B[J");
       stdout.write(prompt + input);
+      suggestionsVisible = false;
       if (completionMode === "meta" && suggestions.length > 0) {
+        suggestionsVisible = true;
+        stdout.write("\x1B[s");
         stdout.write(`
 `);
         stdout.write(`${colors.dim}${"\u2500".repeat(70)}${colors.reset}
@@ -5656,10 +5694,10 @@ async function readLineWithAutocomplete(prompt, rl) {
         });
         stdout.write(`
 ${colors.dim}${"\u2500".repeat(70)}${colors.reset}`);
-        lastDrawnSuggestions = suggestions.length + 2;
-        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        readline.cursorTo(stdout, inputEndCol);
+        stdout.write("\x1B[u");
       } else if (completionMode === "path" && pathCompletions.length > 0) {
+        suggestionsVisible = true;
+        stdout.write("\x1B[s");
         stdout.write(`
 `);
         const maxDisplay = Math.min(pathCompletions.length, 10);
@@ -5678,14 +5716,11 @@ ${colors.dim}${"\u2500".repeat(70)}${colors.reset}`);
         if (pathCompletions.length > maxDisplay) {
           stdout.write(`
 ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
-          lastDrawnSuggestions = maxDisplay + 1;
-        } else {
-          lastDrawnSuggestions = maxDisplay;
         }
-        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        readline.cursorTo(stdout, inputEndCol);
-      } else {
-        lastDrawnSuggestions = 0;
+        stdout.write("\x1B[u");
+      }
+      if (stdin.isTTY) {
+        stdin.setRawMode(true);
       }
     };
     const updateSuggestions = () => {
@@ -5695,17 +5730,20 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         pathCompletions = [];
         suggestions = META_COMMANDS.filter((cmd) => cmd.command.startsWith(input));
         if (suggestions.length > 0 && !hadSuggestions) {
-          selectedIndex = 0;
+          originalInput = input;
+          selectedIndex = -1;
         } else if (suggestions.length > 0 && selectedIndex >= suggestions.length) {
           selectedIndex = suggestions.length - 1;
         } else if (suggestions.length === 0) {
           selectedIndex = -1;
+          originalInput = "";
         }
       } else {
         suggestions = [];
         completionMode = null;
         pathCompletions = [];
         selectedIndex = -1;
+        originalInput = "";
       }
     };
     const updatePathCompletions = () => {
@@ -5720,42 +5758,28 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         return;
       }
       pathCompletions = getPathCompletions(lastWord);
-      completionMode = pathCompletions.length > 0 ? "path" : null;
-      selectedIndex = pathCompletions.length > 0 ? 0 : -1;
+      if (pathCompletions.length > 0) {
+        completionMode = "path";
+        originalInput = input;
+        selectedIndex = -1;
+      } else {
+        completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
+      }
     };
     const onKeypress = (str, key) => {
       if (!key)
         return;
       if (key.name === "return" || key.name === "enter") {
-        let result = input;
-        if (completionMode === "meta" && suggestions.length > 0 && selectedIndex >= 0 && selectedIndex < suggestions.length) {
-          result = suggestions[selectedIndex].command;
-          readline.cursorTo(stdout, 0);
-          readline.clearLine(stdout, 0);
-          stdout.write(prompt + result);
-        } else if (completionMode === "path" && pathCompletions.length > 0 && selectedIndex >= 0 && selectedIndex < pathCompletions.length) {
-          const words = input.split(/\s+/);
-          words[words.length - 1] = pathCompletions[selectedIndex];
-          result = words.join(" ");
-          readline.cursorTo(stdout, 0);
-          readline.clearLine(stdout, 0);
-          stdout.write(prompt + result);
+        const result = input;
+        stdin.removeListener("keypress", onKeypress);
+        if (stdin.isTTY) {
+          stdin.setRawMode(false);
         }
-        if (lastDrawnSuggestions > 0) {
-          readline.moveCursor(stdout, 0, 1);
-          for (let i = 0;i < lastDrawnSuggestions; i++) {
-            readline.clearLine(stdout, 0);
-            if (i < lastDrawnSuggestions - 1) {
-              readline.moveCursor(stdout, 0, 1);
-            }
-          }
-          readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        }
-        readline.cursorTo(stdout, prompt.length + result.length);
+        stdout.write("\x1B[J");
         stdout.write(`
 `);
-        stdin.setRawMode(false);
-        stdin.removeListener("keypress", onKeypress);
         resolve(result);
         return;
       }
@@ -5776,11 +5800,25 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
           return;
         }
       }
+      if (key.name === "escape") {
+        if (completionMode && originalInput) {
+          input = originalInput;
+          suggestions = [];
+          pathCompletions = [];
+          completionMode = null;
+          selectedIndex = -1;
+          originalInput = "";
+          redraw();
+        }
+        return;
+      }
       if (key.name === "backspace") {
         if (key.meta) {
           input = "";
           pathCompletions = [];
           completionMode = null;
+          selectedIndex = -1;
+          originalInput = "";
           updateSuggestions();
           redraw();
           return;
@@ -5789,6 +5827,8 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
           input = input.slice(0, -1);
           pathCompletions = [];
           completionMode = null;
+          selectedIndex = -1;
+          originalInput = "";
           updateSuggestions();
           redraw();
         }
@@ -5798,6 +5838,8 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         input = "";
         pathCompletions = [];
         completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
         updateSuggestions();
         redraw();
         return;
@@ -5806,42 +5848,85 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         input = "";
         pathCompletions = [];
         completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
         updateSuggestions();
         redraw();
         return;
       }
       if (key.name === "up") {
-        const maxItems = completionMode === "meta" ? suggestions.length : pathCompletions.length;
-        if (maxItems > 0) {
-          selectedIndex = selectedIndex <= 0 ? maxItems - 1 : selectedIndex - 1;
+        if (completionMode === "meta" && suggestions.length > 0) {
+          if (selectedIndex === -1) {
+            selectedIndex = suggestions.length - 1;
+          } else {
+            selectedIndex = selectedIndex <= 0 ? suggestions.length - 1 : selectedIndex - 1;
+          }
+          input = suggestions[selectedIndex].command;
+          redraw();
+        } else if (completionMode === "path" && pathCompletions.length > 0) {
+          if (selectedIndex === -1) {
+            selectedIndex = pathCompletions.length - 1;
+          } else {
+            selectedIndex = selectedIndex <= 0 ? pathCompletions.length - 1 : selectedIndex - 1;
+          }
+          const words = originalInput.split(/\s+/);
+          words[words.length - 1] = pathCompletions[selectedIndex];
+          input = words.join(" ");
           redraw();
         }
         return;
       }
       if (key.name === "down") {
-        const maxItems = completionMode === "meta" ? suggestions.length : pathCompletions.length;
-        if (maxItems > 0) {
-          selectedIndex = selectedIndex >= maxItems - 1 ? 0 : selectedIndex + 1;
+        if (completionMode === "meta" && suggestions.length > 0) {
+          if (selectedIndex === -1) {
+            selectedIndex = 0;
+          } else {
+            selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          }
+          input = suggestions[selectedIndex].command;
+          redraw();
+        } else if (completionMode === "path" && pathCompletions.length > 0) {
+          if (selectedIndex === -1) {
+            selectedIndex = 0;
+          } else {
+            selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+          }
+          const words = originalInput.split(/\s+/);
+          words[words.length - 1] = pathCompletions[selectedIndex];
+          input = words.join(" ");
           redraw();
         }
         return;
       }
       if (key.name === "tab") {
         if (completionMode === "meta" && suggestions.length > 0) {
-          selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          if (selectedIndex === -1) {
+            selectedIndex = 0;
+          } else {
+            selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          }
+          input = suggestions[selectedIndex].command;
           redraw();
         } else if (completionMode === "path" && pathCompletions.length > 0) {
           if (pathCompletions.length === 1) {
-            const words = input.split(/\s+/);
+            const words = originalInput.split(/\s+/);
             words[words.length - 1] = pathCompletions[0];
             input = words.join(" ");
             pathCompletions = [];
             completionMode = null;
             selectedIndex = -1;
+            originalInput = "";
             updateSuggestions();
             redraw();
           } else {
-            selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+            if (selectedIndex === -1) {
+              selectedIndex = 0;
+            } else {
+              selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+            }
+            const words = originalInput.split(/\s+/);
+            words[words.length - 1] = pathCompletions[selectedIndex];
+            input = words.join(" ");
             redraw();
           }
         } else {
@@ -5854,6 +5939,8 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         input += str;
         pathCompletions = [];
         completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
         updateSuggestions();
         redraw();
       }
@@ -5875,15 +5962,10 @@ async function startRepl(initialConfig) {
     conversationHistory: []
   };
   await showWhisperAsciiArt();
-  console.log(`${colors.bold}Whisper${colors.reset} ${colors.dim}v${VERSION}${colors.reset}`);
-  console.log(`${colors.dim}Natural Language Terminal Assistant${colors.reset}`);
+  console.log(`${colors.bold}Whisper${colors.reset} ${colors.dim}v${VERSION}${colors.reset} ${colors.slate}\u2014 Natural Language Terminal Assistant${colors.reset}`);
   const currentModel = getModelById(state.config.selected_model);
-  if (currentModel) {
-    console.log(`${colors.dim}Model: ${currentModel.name} (use "/models" to change)${colors.reset}`);
-  } else {
-    console.log(`${colors.dim}Model: ${state.config.selected_model} (use "/models" to change)${colors.reset}`);
-  }
-  console.log(`${colors.slate}Type ${colors.accent}/help${colors.reset}${colors.slate} for usage, ${colors.accent}/exit${colors.reset}${colors.slate} to quit${colors.reset}
+  const modelName = currentModel ? currentModel.name : state.config.selected_model;
+  console.log(`${colors.slate}Model:${colors.reset} ${modelName} ${colors.dim}\xB7${colors.reset} ${colors.accent}/models${colors.reset} ${colors.dim}\xB7${colors.reset} ${colors.accent}/help${colors.reset} ${colors.dim}\xB7${colors.reset} ${colors.accent}/exit${colors.reset}
 `);
   if (!state.config.first_run_complete) {
     showFirstRunTips();
@@ -6076,9 +6158,10 @@ ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
           armMode: state.armMode
         });
       } else {
-        showOutputSeparator("Output");
+        console.log(`${colors.accent}\u2192${colors.reset} ${colors.dim}${command}${colors.reset}`);
+        showOutputHeader("Output");
         const result = await executeCommand(command, state.config);
-        console.log(`${colors.dim}${"\u2500".repeat(75)}${colors.reset}`);
+        showOutputFooter();
         const statusIcon = result.exitCode === 0 ? `${colors.green}\u2713${colors.reset}` : `${colors.red}\u2717${colors.reset}`;
         const exitMessage = result.exitCode === 0 ? "Success" : `Exit code: ${result.exitCode}`;
         console.log(`${statusIcon} ${exitMessage} ${colors.dim}(${result.duration}ms)${colors.reset}`);
@@ -6240,9 +6323,10 @@ ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
           armMode: state.armMode
         });
       } else {
-        showOutputSeparator("Output");
+        console.log(`${colors.accent}\u2192${colors.reset} ${colors.dim}${command}${colors.reset}`);
+        showOutputHeader("Output");
         const result = await executeCommand(command, state.config);
-        console.log(`${colors.dim}${"\u2500".repeat(75)}${colors.reset}`);
+        showOutputFooter();
         const statusIcon = result.exitCode === 0 ? `${colors.green}\u2713${colors.reset}` : `${colors.red}\u2717${colors.reset}`;
         let exitMessage = `Exit code: ${result.exitCode}`;
         if (exit_codes && exit_codes[result.exitCode.toString()]) {
