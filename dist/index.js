@@ -10,6 +10,7 @@ var __export = (target, all) => {
       set: (newValue) => all[name] = () => newValue
     });
 };
+var __require = import.meta.require;
 
 // src/index.ts
 import { platform as platform2 } from "os";
@@ -4003,25 +4004,29 @@ var CommandResponseSchema = exports_external.object({
 });
 var WhisperConfigSchema = exports_external.object({
   api_key: exports_external.string().optional(),
-  default_model: exports_external.string().default("qwen/qwen-2.5-7b-instruct"),
-  fallback_model: exports_external.string().default("google/gemini-2.5-flash-lite"),
+  selected_model: exports_external.string().default("xiaomi/mimo-v2-flash:free"),
+  default_model: exports_external.string().default("xiaomi/mimo-v2-flash:free"),
+  fallback_model: exports_external.string().default("mistralai/devstral-2512:free"),
   auto_run_safe: exports_external.boolean().default(true),
   max_output_lines: exports_external.number().default(300),
   command_timeout_ms: exports_external.number().default(1e4),
   arm_duration_seconds: exports_external.number().default(60),
   custom_denylist: exports_external.array(exports_external.string()).default([]),
-  custom_allowlist: exports_external.array(exports_external.string()).default([])
+  custom_allowlist: exports_external.array(exports_external.string()).default([]),
+  first_run_complete: exports_external.boolean().default(false)
 });
 var DEFAULT_CONFIG = {
   api_key: undefined,
-  default_model: "qwen/qwen-2.5-7b-instruct",
-  fallback_model: "google/gemini-2.5-flash-lite",
+  selected_model: "xiaomi/mimo-v2-flash:free",
+  default_model: "xiaomi/mimo-v2-flash:free",
+  fallback_model: "mistralai/devstral-2512:free",
   auto_run_safe: true,
   max_output_lines: 300,
   command_timeout_ms: 1e4,
   arm_duration_seconds: 60,
   custom_denylist: [],
-  custom_allowlist: []
+  custom_allowlist: [],
+  first_run_complete: false
 };
 
 // src/config.ts
@@ -4267,7 +4272,24 @@ function parseJSONResponse(text) {
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      const extracted = cleaned.slice(start, end + 1);
+      return JSON.parse(extracted);
+    }
+    throw new Error("Failed to parse JSON response from the model.");
+  }
+}
+function formatAttemptError(attemptLabel, error) {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const indented = message.replace(/\n/g, `
+  `);
+  return `${attemptLabel}
+  ${indented}`;
 }
 async function callOpenRouter(model, userMessage, systemPrompt, apiKey, conversationHistory = []) {
   const messages = [
@@ -4311,7 +4333,7 @@ async function generateCommand(userInput, context, defaultModel, fallbackModel, 
     const parsed = parseJSONResponse(responseText);
     return CommandResponseSchema.parse(parsed);
   } catch (error) {
-    console.error("Attempt 1 failed:", error);
+    console.error(formatAttemptError("Attempt 1 failed:", error));
   }
   try {
     const stricterPrompt = `${systemPrompt}
@@ -4321,20 +4343,23 @@ IMPORTANT: Your response must be ONLY valid JSON. Do not include any text before
     const parsed = parseJSONResponse(responseText);
     return CommandResponseSchema.parse(parsed);
   } catch (error) {
-    console.error("Attempt 2 failed:", error);
+    console.error(formatAttemptError("Attempt 2 failed:", error));
   }
   try {
     const responseText = await callOpenRouter(fallbackModel, userInput, systemPrompt, apiKey, conversationHistory);
     const parsed = parseJSONResponse(responseText);
     return CommandResponseSchema.parse(parsed);
   } catch (error) {
-    throw new Error(`All 3 attempts failed to generate a valid command. Last error: ${error}`);
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+    throw new Error(`All 3 attempts failed to generate a valid command.
+  Last error: ${message}`);
   }
 }
 
 // src/policy.ts
 var SAFE_COMMANDS = new Set([
   "pwd",
+  "cd",
   "ls",
   "cat",
   "head",
@@ -4363,7 +4388,36 @@ var SAFE_COMMANDS = new Set([
   "type",
   "man",
   "help",
-  "history"
+  "history",
+  "clear",
+  "tree",
+  "df",
+  "du",
+  "free",
+  "uptime",
+  "top",
+  "htop",
+  "sw_vers",
+  "system_profiler",
+  "diskutil",
+  "ifconfig",
+  "ip",
+  "route",
+  "arp",
+  "nslookup",
+  "dig",
+  "host",
+  "ping",
+  "traceroute",
+  "cal",
+  "bc",
+  "units",
+  "w",
+  "users",
+  "last",
+  "lastlog",
+  "id",
+  "groups"
 ]);
 var SAFE_GIT_SUBCOMMANDS = new Set([
   "status",
@@ -4756,11 +4810,12 @@ function formatAuditEntry(entry) {
 }
 
 // src/spinner.ts
-var ORANGE = "\x1B[38;5;208m";
+var ACCENT = "\x1B[38;5;214m";
+var MUTED = "\x1B[38;5;245m";
 var RESET = "\x1B[0m";
 
 class LoadingSpinner {
-  frames = ["\u25B1\u25B1\u25B1\u25B1\u25B1", "\u25B0\u25B1\u25B1\u25B1\u25B1", "\u25B0\u25B0\u25B1\u25B1\u25B1", "\u25B0\u25B0\u25B0\u25B1\u25B1", "\u25B0\u25B0\u25B0\u25B0\u25B1", "\u25B0\u25B0\u25B0\u25B0\u25B0", "\u25B1\u25B0\u25B0\u25B0\u25B0", "\u25B1\u25B1\u25B0\u25B0\u25B0", "\u25B1\u25B1\u25B1\u25B0\u25B0", "\u25B1\u25B1\u25B1\u25B1\u25B0"];
+  frames = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
   currentFrame = 0;
   intervalId = null;
   isRunning = false;
@@ -4778,7 +4833,7 @@ class LoadingSpinner {
   }
   render(message) {
     const frame = this.frames[this.currentFrame];
-    process.stdout.write(`\r${ORANGE}${frame}${RESET} ${message}...`);
+    process.stdout.write(`\r${ACCENT}${frame}${RESET} ${message}${MUTED}\u2026${RESET}`);
   }
   stop() {
     if (!this.isRunning)
@@ -4796,7 +4851,158 @@ function createSpinner() {
   return new LoadingSpinner;
 }
 
+// src/models.ts
+var AVAILABLE_MODELS = [
+  {
+    id: "xiaomi/mimo-v2-flash:free",
+    name: "MiMo-V2-Flash (free)",
+    description: "Fast Xiaomi model",
+    contextWindow: 262144,
+    pricePer1MTokens: 0,
+    speed: "fast",
+    recommended: true
+  },
+  {
+    id: "mistralai/devstral-2512:free",
+    name: "Devstral 2 2512 (free)",
+    description: "Free coding model",
+    contextWindow: 262144,
+    pricePer1MTokens: 0,
+    speed: "fast"
+  },
+  {
+    id: "x-ai/grok-code-fast-1",
+    name: "Grok Code Fast 1",
+    description: "Grok coding model",
+    contextWindow: 256000,
+    pricePer1MTokens: 0.85,
+    speed: "fast"
+  },
+  {
+    id: "anthropic/claude-sonnet-4.5",
+    name: "Claude Sonnet 4.5",
+    description: "Claude general-purpose",
+    contextWindow: 1e6,
+    pricePer1MTokens: 9,
+    speed: "medium"
+  },
+  {
+    id: "anthropic/claude-opus-4.5",
+    name: "Claude Opus 4.5",
+    description: "Highest-accuracy Claude",
+    contextWindow: 200000,
+    pricePer1MTokens: 15,
+    speed: "slow"
+  },
+  {
+    id: "google/gemini-3-flash-preview",
+    name: "Gemini 3 Flash Preview",
+    description: "Fast Google model",
+    contextWindow: 1048576,
+    pricePer1MTokens: 1.75,
+    speed: "fast"
+  },
+  {
+    id: "minimax/minimax-m2.1",
+    name: "MiniMax M2.1",
+    description: "Efficient coding model",
+    contextWindow: 196608,
+    pricePer1MTokens: 0.695,
+    speed: "medium"
+  },
+  {
+    id: "z-ai/glm-4.7",
+    name: "GLM 4.7",
+    description: "Z.AI flagship model",
+    contextWindow: 202752,
+    pricePer1MTokens: 0.95,
+    speed: "medium"
+  },
+  {
+    id: "deepseek/deepseek-v3.2",
+    name: "DeepSeek V3.2",
+    description: "Balanced DeepSeek",
+    contextWindow: 163840,
+    pricePer1MTokens: 0.315,
+    speed: "medium"
+  }
+];
+function getModelById(modelId) {
+  return AVAILABLE_MODELS.find((m) => m.id === modelId);
+}
+function formatModelDisplay(model, isCurrent = false) {
+  const marker = isCurrent ? "\u2192" : " ";
+  const recommended = model.recommended ? " \u2605" : "";
+  const price = model.pricePer1MTokens === 0 ? "free" : `$${model.pricePer1MTokens}/1M`;
+  return `${marker} ${model.name}${recommended} \xB7 ${model.speed} \xB7 ${price}`;
+}
+function listModels(currentModelId) {
+  return AVAILABLE_MODELS.map((model) => formatModelDisplay(model, model.id === currentModelId)).join(`
+`);
+}
+// package.json
+var package_default = {
+  name: "@shahidrogers/whisper-cli",
+  version: "0.2.0",
+  description: "Natural language terminal assistant that converts your intentions into safe shell commands",
+  type: "module",
+  bin: {
+    whisper: "./dist/index.js"
+  },
+  scripts: {
+    dev: "bun run src/index.ts",
+    build: "bun build src/index.ts --outdir dist --target bun",
+    test: "bun test",
+    lint: "tsc --noEmit",
+    prepublishOnly: "bun run build"
+  },
+  keywords: [
+    "cli",
+    "terminal",
+    "assistant",
+    "ai",
+    "shell",
+    "natural-language",
+    "llm",
+    "openrouter",
+    "command-line",
+    "automation",
+    "safety"
+  ],
+  author: "Shahid Rogers",
+  license: "MIT",
+  repository: {
+    type: "git",
+    url: "https://github.com/shahidrogers/whisper-cli.git"
+  },
+  bugs: {
+    url: "https://github.com/shahidrogers/whisper-cli/issues"
+  },
+  homepage: "https://github.com/shahidrogers/whisper-cli#readme",
+  files: [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  dependencies: {
+    zod: "^3.22.4"
+  },
+  devDependencies: {
+    "@types/bun": "latest",
+    typescript: "^5.3.3"
+  },
+  engines: {
+    bun: ">=1.0.0"
+  },
+  os: [
+    "darwin",
+    "linux"
+  ]
+};
+
 // src/repl.ts
+var VERSION = package_default.version;
 var colors = {
   reset: "\x1B[0m",
   dim: "\x1B[2m",
@@ -4807,8 +5013,41 @@ var colors = {
   blue: "\x1B[34m",
   magenta: "\x1B[35m",
   cyan: "\x1B[36m",
-  orange: "\x1B[38;5;214m"
+  orange: "\x1B[38;5;214m",
+  slate: "\x1B[38;5;245m",
+  accent: "\x1B[38;5;81m"
 };
+var ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+function visibleLength(text) {
+  return text.replace(ANSI_PATTERN, "").length;
+}
+function getTerminalWidth() {
+  const columns = process.stdout.columns ?? 80;
+  return Math.max(64, Math.min(96, columns - 4));
+}
+function padRight(text, width) {
+  return text + " ".repeat(Math.max(0, width - visibleLength(text)));
+}
+function wrapWords(text, width) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    if (!current) {
+      current = word;
+      continue;
+    }
+    if (visibleLength(current) + 1 + word.length <= width) {
+      current += ` ${word}`;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current)
+    lines.push(current);
+  return lines.length > 0 ? lines : [""];
+}
 function getRiskBadge(risk) {
   switch (risk) {
     case "SAFE" /* SAFE */:
@@ -4819,30 +5058,68 @@ function getRiskBadge(risk) {
       return `${colors.red}[DANGEROUS]${colors.reset}`;
   }
 }
-function showBoxedMessage(message) {
+function renderPanel(title, lines, borderColor = colors.orange) {
+  const width = getTerminalWidth();
+  const contentWidth = width - 4;
+  const headerText = ` ${colors.bold}${title}${colors.reset} `;
+  const dashCount = Math.max(0, width - 2 - visibleLength(headerText));
   console.log(`
-${colors.orange}\u256D\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256E${colors.reset}`);
-  const maxWidth = 43;
-  const words = message.split(" ");
-  let lines = [];
-  let currentLine = "";
-  for (const word of words) {
-    if (currentLine.length + word.length + 1 <= maxWidth) {
-      currentLine += (currentLine ? " " : "") + word;
-    } else {
-      if (currentLine)
-        lines.push(currentLine);
-      currentLine = word;
-    }
-  }
-  if (currentLine)
-    lines.push(currentLine);
+${borderColor}\u256D${colors.reset}${headerText}${borderColor}${"\u2500".repeat(dashCount)}\u256E${colors.reset}`);
   for (const line of lines) {
-    const padding = maxWidth - line.length;
-    console.log(`${colors.orange}\u2502${colors.reset} ${line}${" ".repeat(padding)} ${colors.orange}\u2502${colors.reset}`);
+    console.log(`${borderColor}\u2502${colors.reset} ${padRight(line, contentWidth)} ${borderColor}\u2502${colors.reset}`);
   }
-  console.log(`${colors.orange}\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F${colors.reset}
+  console.log(`${borderColor}\u2570${"\u2500".repeat(width - 2)}\u256F${colors.reset}
 `);
+}
+function showBoxedMessage(message) {
+  const width = getTerminalWidth();
+  const contentWidth = width - 4;
+  const lines = wrapWords(message, contentWidth);
+  renderPanel("Whisper", lines, colors.orange);
+}
+function showCommandPreview(command, explanation, risk, autoRun = false) {
+  const width = getTerminalWidth();
+  const contentWidth = width - 4;
+  const badge = getRiskBadge(risk);
+  const statusText = autoRun ? "AUTO-RUN" : "CONFIRM";
+  let borderColor;
+  switch (risk) {
+    case "SAFE" /* SAFE */:
+      borderColor = colors.green;
+      break;
+    case "CAUTION" /* CAUTION */:
+      borderColor = colors.yellow;
+      break;
+    case "DANGEROUS" /* DANGEROUS */:
+      borderColor = colors.red;
+      break;
+  }
+  const headerText = ` ${badge} ${colors.dim}${statusText}${colors.reset} `;
+  const dashCount = Math.max(0, width - 2 - visibleLength(headerText));
+  console.log(`
+${borderColor}\u256D${colors.reset}${headerText}${borderColor}${"\u2500".repeat(dashCount)}\u256E${colors.reset}`);
+  const commandPrefixPlain = "Command: ";
+  const commandPrefix = `${colors.bold}Command${colors.reset}: `;
+  const commandLines = wrapWords(command, contentWidth - commandPrefixPlain.length);
+  commandLines.forEach((line, idx) => {
+    const text = idx === 0 ? `${commandPrefix}${line}` : `${" ".repeat(commandPrefixPlain.length)}${line}`;
+    console.log(`${borderColor}\u2502${colors.reset} ${padRight(text, contentWidth)} ${borderColor}\u2502${colors.reset}`);
+  });
+  const explanationPrefixPlain = "Why: ";
+  const explanationPrefix = `${colors.dim}Why${colors.reset}: `;
+  const explanationLines = wrapWords(explanation, contentWidth - explanationPrefixPlain.length);
+  explanationLines.forEach((line, idx) => {
+    const text = idx === 0 ? `${explanationPrefix}${colors.dim}${line}${colors.reset}` : `${" ".repeat(explanationPrefixPlain.length)}${colors.dim}${line}${colors.reset}`;
+    console.log(`${borderColor}\u2502${colors.reset} ${padRight(text, contentWidth)} ${borderColor}\u2502${colors.reset}`);
+  });
+  console.log(`${borderColor}\u2570${"\u2500".repeat(width - 2)}\u256F${colors.reset}
+`);
+}
+function showOutputSeparator(label = "Output") {
+  const width = getTerminalWidth();
+  const labelText = ` ${label} `;
+  const dashCount = Math.max(0, width - labelText.length);
+  console.log(`${colors.dim}${labelText}${"\u2500".repeat(dashCount)}${colors.reset}`);
 }
 async function showWhisperAsciiArt() {
   const art = [
@@ -4898,50 +5175,63 @@ async function showWhisperAsciiArt() {
   await new Promise((resolve) => setTimeout(resolve, 500));
 }
 function buildPrompt(state) {
-  let prompt = "whisper";
+  const cwd = process.cwd();
+  const home = __require("os").homedir();
+  const shortCwd = cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+  const dirName = shortCwd.split("/").pop() || shortCwd;
+  let prompt = `${colors.accent}whisper${colors.reset} ${colors.slate}${dirName}${colors.reset}`;
   const badges = [];
   if (state.dryRun)
     badges.push(`${colors.orange}DRY${colors.reset}`);
   if (state.armMode)
     badges.push(`${colors.red}ARMED${colors.reset}`);
   if (badges.length > 0) {
-    prompt += ` [${badges.join(" ")}]`;
+    prompt += ` ${colors.dim}\xB7${colors.reset} ${badges.join(" ")}`;
   }
-  prompt += "> ";
+  prompt += ` ${colors.accent}\u203A${colors.reset} `;
   return prompt;
 }
 function showHelp() {
   console.log(`
-${colors.bold}Whisper CLI - Natural Language Terminal Assistant${colors.reset}
+${colors.bold}Whisper${colors.reset} ${colors.dim}Natural Language Terminal Assistant${colors.reset}
+
+${colors.bold}Try:${colors.reset}
+  ${colors.accent}show me all files${colors.reset}
+  ${colors.accent}what's using port 8080${colors.reset}
+  ${colors.accent}find all .log files modified today${colors.reset}
 
 ${colors.bold}Usage:${colors.reset}
-  Type natural language requests to generate and execute shell commands.
-  Follow-up questions work! Ask "list apps on port 3000" then "port 4000?"
+  Type natural language to generate commands, or type direct shell commands to skip the LLM.
+  Follow-up questions work: "list apps on port 3000" then "port 4000?"
+  Press ${colors.accent}Tab${colors.reset} to autocomplete paths.
 
-${colors.bold}Meta Commands:${colors.reset}
-  /help              Show this help message
-  /exit              Quit (or press Ctrl+D)
-  /dry               Toggle dry-run mode (show commands without executing)
-  /model <name>      Change the LLM model
-  /key               Change your OpenRouter API key
-  /history           Show last 20 commands from audit log
-  /clear             Clear conversation history
-  /arm               Enable dangerous commands for 60 seconds
-  /unarm             Disable arm mode
+${colors.bold}Meta:${colors.reset}
+  ${colors.accent}/help${colors.reset}        Show this help message
+  ${colors.accent}/exit${colors.reset}        Quit (or press Ctrl+D)
+  ${colors.accent}/dry${colors.reset}         Toggle dry-run mode
+  ${colors.accent}/models${colors.reset}      List all available models
+  ${colors.accent}/model <id>${colors.reset}  Change the LLM model
+  ${colors.accent}/key${colors.reset}         Change your OpenRouter API key
+  ${colors.accent}/history${colors.reset}     Show last 20 commands from audit log
+  ${colors.accent}/clear${colors.reset}       Clear conversation history
+  ${colors.accent}/arm${colors.reset}         Enable dangerous commands for 60 seconds
+  ${colors.accent}/unarm${colors.reset}       Disable arm mode
 
-${colors.bold}Safety Levels:${colors.reset}
-  ${colors.green}SAFE${colors.reset}       - Auto-executed (e.g., ls, cat, git status)
-  ${colors.yellow}CAUTION${colors.reset}    - Requires confirmation (e.g., kill, mv, rm)
-  ${colors.red}DANGEROUS${colors.reset}  - Blocked without /arm mode (e.g., sudo, rm -rf)
-
-${colors.bold}Examples:${colors.reset}
-  "show me all files"
-  "what's using port 8080"
-  "find all .log files modified today"
-  "show git commit history"
+${colors.bold}Safety:${colors.reset}
+  ${colors.green}SAFE${colors.reset}     Auto-executed (e.g., ls, cat, git status)
+  ${colors.yellow}CAUTION${colors.reset} Requires confirmation (e.g., kill, mv, rm)
+  ${colors.red}DANGEROUS${colors.reset} Blocked without /arm (e.g., sudo, rm -rf)
 `);
 }
-async function showHistory() {
+function showFirstRunTips() {
+  renderPanel("Welcome", [
+    `${colors.green}\u2022${colors.reset} Type what you want in plain English`,
+    `${colors.green}\u2022${colors.reset} Press ${colors.accent}Tab${colors.reset} to autocomplete paths`,
+    `${colors.green}\u2022${colors.reset} Press ${colors.accent}ESC${colors.reset} while thinking to cancel`,
+    `${colors.bold}Try:${colors.reset} ${colors.dim}"show me all files"${colors.reset} or ${colors.dim}"cd node"${colors.reset} then press Tab`
+  ], colors.orange);
+}
+async function showHistorySimple() {
   const entries = await readAuditHistory(20);
   if (entries.length === 0) {
     console.log("No command history yet.");
@@ -4955,13 +5245,224 @@ ${colors.bold}Recent Commands:${colors.reset}
   }
   console.log();
 }
+async function showHistoryInteractive(rl) {
+  const allEntries = await readAuditHistory(100);
+  if (allEntries.length === 0) {
+    console.log("No command history yet.");
+    return;
+  }
+  let searchQuery = "";
+  let filteredEntries = allEntries.reverse();
+  let selectedIndex = 0;
+  let showingDetails = false;
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+  const filterEntries = (query) => {
+    if (!query)
+      return allEntries;
+    const lowerQuery = query.toLowerCase();
+    return allEntries.filter((entry) => entry.command.toLowerCase().includes(lowerQuery) || entry.userInput.toLowerCase().includes(lowerQuery) || entry.explanation.toLowerCase().includes(lowerQuery));
+  };
+  const formatEntryLine = (entry, isSelected) => {
+    const timestamp = new Date(entry.timestamp).toLocaleTimeString();
+    const status = entry.executed ? entry.exitCode === 0 ? `${colors.green}\u2713${colors.reset}` : `${colors.red}\u2717${colors.reset}` : `${colors.dim}-${colors.reset}`;
+    let riskBadge = "";
+    if (entry.riskLevel === "SAFE")
+      riskBadge = `${colors.green}S${colors.reset}`;
+    else if (entry.riskLevel === "CAUTION")
+      riskBadge = `${colors.yellow}C${colors.reset}`;
+    else
+      riskBadge = `${colors.red}D${colors.reset}`;
+    const marker = isSelected ? "\u2192" : " ";
+    const lineColor = isSelected ? colors.cyan : "";
+    const reset = isSelected ? colors.reset : "";
+    return `${lineColor}${marker} ${timestamp} ${status} ${riskBadge} ${entry.command.slice(0, 60)}${reset}`;
+  };
+  const showDetails = (entry) => {
+    stdout.write("\x1B[2J\x1B[H");
+    console.log(`${colors.bold}Command Details${colors.reset}
+`);
+    console.log(`${colors.dim}Timestamp:${colors.reset} ${new Date(entry.timestamp).toLocaleString()}`);
+    console.log(`${colors.dim}User Input:${colors.reset} ${entry.userInput}`);
+    console.log(`${colors.dim}Command:${colors.reset} ${entry.command}`);
+    console.log(`${colors.dim}Explanation:${colors.reset} ${entry.explanation}`);
+    console.log(`${colors.dim}Risk Level:${colors.reset} ${entry.riskLevel}`);
+    console.log(`${colors.dim}Executed:${colors.reset} ${entry.executed ? "Yes" : "No"}`);
+    if (entry.executed) {
+      console.log(`${colors.dim}Exit Code:${colors.reset} ${entry.exitCode}`);
+      console.log(`${colors.dim}Duration:${colors.reset} ${entry.duration}ms`);
+    }
+    console.log(`${colors.dim}Dry Run:${colors.reset} ${entry.dryRun ? "Yes" : "No"}`);
+    console.log(`${colors.dim}Armed:${colors.reset} ${entry.armMode ? "Yes" : "No"}`);
+    console.log(`
+${colors.dim}Press any key to go back...${colors.reset}`);
+  };
+  const render = () => {
+    if (showingDetails)
+      return;
+    stdout.write("\x1B[2J\x1B[H");
+    console.log(`${colors.bold}Command History${colors.reset} ${colors.dim}(${filteredEntries.length} entries)${colors.reset}`);
+    if (searchQuery) {
+      console.log(`${colors.dim}Search: ${searchQuery}_${colors.reset}`);
+    } else {
+      console.log(`${colors.dim}Type to search, \u2191/\u2193 to navigate, Enter for details, Esc to exit${colors.reset}`);
+    }
+    console.log();
+    const maxDisplay = 15;
+    const startIdx = Math.max(0, selectedIndex - Math.floor(maxDisplay / 2));
+    const endIdx = Math.min(filteredEntries.length, startIdx + maxDisplay);
+    for (let i = startIdx;i < endIdx; i++) {
+      console.log(formatEntryLine(filteredEntries[i], i === selectedIndex));
+    }
+    if (filteredEntries.length === 0) {
+      console.log(`${colors.yellow}No matching commands found${colors.reset}`);
+    }
+  };
+  await new Promise((resolve) => {
+    function cleanup() {
+      stdin.removeListener("keypress", onKeypress);
+      if (stdin.isTTY) {
+        stdin.setRawMode(false);
+      }
+      stdout.write("\x1B[2J\x1B[H");
+    }
+    function finish() {
+      cleanup();
+      resolve();
+    }
+    const onKeypress = (_str, key) => {
+      if (showingDetails) {
+        showingDetails = false;
+        render();
+        return;
+      }
+      if (key?.name === "up") {
+        selectedIndex = Math.max(0, selectedIndex - 1);
+        render();
+        return;
+      }
+      if (key?.name === "down") {
+        selectedIndex = Math.min(filteredEntries.length - 1, selectedIndex + 1);
+        render();
+        return;
+      }
+      if (key?.name === "return") {
+        if (filteredEntries.length > 0) {
+          showingDetails = true;
+          showDetails(filteredEntries[selectedIndex]);
+        }
+        return;
+      }
+      if (key?.name === "escape" || key?.name === "q") {
+        finish();
+        return;
+      }
+      if (key?.name === "backspace") {
+        if (searchQuery.length > 0) {
+          searchQuery = searchQuery.slice(0, -1);
+          filteredEntries = filterEntries(searchQuery);
+          selectedIndex = 0;
+          render();
+        }
+        return;
+      }
+      if (key?.ctrl && key?.name === "c") {
+        finish();
+        return;
+      }
+      if (_str && !key?.ctrl && !key?.meta && _str.length === 1 && _str.charCodeAt(0) >= 32) {
+        searchQuery += _str;
+        filteredEntries = filterEntries(searchQuery);
+        selectedIndex = 0;
+        render();
+      }
+    };
+    readline.emitKeypressEvents(stdin);
+    if (stdin.isTTY) {
+      stdin.setRawMode(true);
+    }
+    stdin.on("keypress", onKeypress);
+    render();
+  });
+}
+async function promptModelSelection(state, rl) {
+  const models = AVAILABLE_MODELS;
+  if (models.length === 0) {
+    console.log(`${colors.red}No models available.${colors.reset}`);
+    return;
+  }
+  let index = Math.max(0, models.findIndex((model) => model.id === state.config.selected_model));
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+  const render = () => {
+    stdout.write("\x1B[2J\x1B[H");
+    console.log(`${colors.bold}Select a model:${colors.reset}`);
+    console.log(`${colors.dim}Use \u2191/\u2193 to move, Enter to select, Esc to cancel${colors.reset}
+`);
+    for (let i = 0;i < models.length; i += 1) {
+      const model = models[i];
+      const isSelected = i === index;
+      const marker = isSelected ? "\u2192" : " ";
+      const recommended = model.recommended ? ` ${colors.green}\u2605${colors.reset}` : "";
+      const lineColor = isSelected ? colors.cyan : "";
+      const reset = isSelected ? colors.reset : "";
+      const price = model.pricePer1MTokens === 0 ? "free" : `$${model.pricePer1MTokens}/1M`;
+      console.log(`${lineColor}${marker} ${model.name}${recommended}${reset} ${colors.dim}\xB7 ${model.speed} \xB7 ${price}${reset}`);
+    }
+    console.log();
+  };
+  const selected = await new Promise((resolve) => {
+    function cleanup() {
+      stdin.removeListener("keypress", onKeypress);
+      if (stdin.isTTY) {
+        stdin.setRawMode(false);
+      }
+      stdout.write("\x1B[2J\x1B[H");
+    }
+    function finish(value) {
+      cleanup();
+      resolve(value);
+    }
+    const onKeypress = (_str, key) => {
+      if (key?.name === "up") {
+        index = (index - 1 + models.length) % models.length;
+        render();
+        return;
+      }
+      if (key?.name === "down") {
+        index = (index + 1) % models.length;
+        render();
+        return;
+      }
+      if (key?.name === "return") {
+        finish(models[index]);
+        return;
+      }
+      if (key?.name === "escape" || key?.name === "q") {
+        finish(null);
+      }
+    };
+    readline.emitKeypressEvents(stdin);
+    if (stdin.isTTY) {
+      stdin.setRawMode(true);
+    }
+    stdin.on("keypress", onKeypress);
+    render();
+  });
+  if (!selected) {
+    console.log(`${colors.yellow}Cancelled${colors.reset}
+`);
+    return;
+  }
+  state.config.selected_model = selected.id;
+  await saveConfig(state.config);
+  console.log(`${colors.green}\u2713${colors.reset} Model: ${colors.bold}${selected.name}${colors.reset}
+`);
+}
 async function askConfirmation(rl, command, explanation, risk) {
   return new Promise((resolve) => {
-    console.log(`
-${getRiskBadge(risk)} ${colors.bold}${command}${colors.reset}`);
-    console.log(`${colors.dim}${explanation}${colors.reset}
-`);
-    rl.question("Proceed? (y/n) [default: n] ", (answer) => {
+    showCommandPreview(command, explanation, risk, false);
+    rl.question(`${colors.bold}Proceed?${colors.reset} (y/n) ${colors.dim}[default: n]${colors.reset} `, (answer) => {
       resolve(answer.trim().toLowerCase() === "y");
     });
   });
@@ -4982,17 +5483,51 @@ async function handleMetaCommand(command, state, rl) {
       state.dryRun = !state.dryRun;
       console.log(`Dry-run mode ${state.dryRun ? "enabled" : "disabled"}`);
       return true;
+    case "models":
+      if (!process.stdin.isTTY) {
+        console.log(`
+${colors.bold}Available Models:${colors.reset}
+`);
+        console.log(listModels(state.config.selected_model));
+        console.log(`
+${colors.dim}Use "/model <id>" to select a model${colors.reset}
+`);
+        return true;
+      }
+      await promptModelSelection(state, rl);
+      return true;
     case "model":
       if (args.length === 0) {
-        console.log(`Current model: ${state.config.default_model}`);
+        const currentModel = getModelById(state.config.selected_model);
+        if (currentModel) {
+          console.log(`
+${colors.bold}Current:${colors.reset} ${currentModel.name}`);
+        } else {
+          console.log(`
+${colors.bold}Current:${colors.reset} ${state.config.selected_model}`);
+        }
+        console.log(`${colors.dim}Use "/models" to see all options${colors.reset}
+`);
       } else {
-        state.config.default_model = args[0];
-        await saveConfig(state.config);
-        console.log(`Model changed to: ${args[0]}`);
+        const modelId = args.join(" ");
+        const model = getModelById(modelId);
+        if (!model) {
+          console.log(`${colors.red}Error: Model not found: ${modelId}${colors.reset}`);
+          console.log(`${colors.dim}Use "/models" to see all available models${colors.reset}`);
+        } else {
+          state.config.selected_model = modelId;
+          await saveConfig(state.config);
+          console.log(`${colors.green}\u2713${colors.reset} Model: ${colors.bold}${model.name}${colors.reset}
+`);
+        }
       }
       return true;
     case "history":
-      await showHistory();
+      if (process.stdin.isTTY) {
+        await showHistoryInteractive(rl);
+      } else {
+        await showHistorySimple();
+      }
       return true;
     case "arm":
       state.armMode = true;
@@ -5021,7 +5556,7 @@ async function handleMetaCommand(command, state, rl) {
       });
     case "clear":
       state.conversationHistory = [];
-      console.log("Conversation history cleared");
+      process.stdout.write("\x1B[2J\x1B[H");
       return true;
     default:
       console.log(`Unknown meta command: ${cmd}`);
@@ -5033,6 +5568,7 @@ var META_COMMANDS = [
   { command: "/help", description: "Show this help message" },
   { command: "/exit", description: "Quit (or press Ctrl+D)" },
   { command: "/dry", description: "Toggle dry-run mode" },
+  { command: "/models", description: "List all available models" },
   { command: "/model", description: "Change the LLM model" },
   { command: "/key", description: "Change your OpenRouter API key" },
   { command: "/history", description: "Show last 20 commands" },
@@ -5040,12 +5576,48 @@ var META_COMMANDS = [
   { command: "/arm", description: "Enable dangerous commands for 60s" },
   { command: "/unarm", description: "Disable arm mode" }
 ];
+function getPathCompletions(partial) {
+  const fs = __require("fs");
+  const path = __require("path");
+  try {
+    if (!partial || partial.trim() === "") {
+      partial = ".";
+    }
+    const home = __require("os").homedir();
+    if (partial === "~") {
+      partial = home;
+    } else if (partial.startsWith("~/")) {
+      partial = partial.replace("~", home);
+    }
+    const dir = path.dirname(partial);
+    const base = path.basename(partial);
+    const searchDir = dir === "." ? process.cwd() : path.resolve(process.cwd(), dir);
+    if (!fs.existsSync(searchDir)) {
+      return [];
+    }
+    const entries = fs.readdirSync(searchDir, { withFileTypes: true });
+    const matches = entries.filter((entry) => {
+      if (entry.name.startsWith(".") && !base.startsWith(".")) {
+        return false;
+      }
+      return entry.name.startsWith(base);
+    }).map((entry) => {
+      const fullPath = dir === "." ? entry.name : path.join(dir, entry.name);
+      return entry.isDirectory() ? fullPath + "/" : fullPath;
+    }).sort();
+    return matches;
+  } catch (error) {
+    return [];
+  }
+}
 async function readLineWithAutocomplete(prompt, rl) {
   return new Promise((resolve) => {
     let input = "";
     let selectedIndex = -1;
     let suggestions = [];
+    let pathCompletions = [];
     let lastDrawnSuggestions = 0;
+    let completionMode = null;
     const stdin = process.stdin;
     const stdout = process.stdout;
     stdout.write(prompt);
@@ -5066,30 +5638,61 @@ async function readLineWithAutocomplete(prompt, rl) {
       }
       readline.clearLine(stdout, 0);
       stdout.write(prompt + input);
-      if (suggestions.length > 0) {
+      if (completionMode === "meta" && suggestions.length > 0) {
         stdout.write(`
+`);
+        stdout.write(`${colors.dim}${"\u2500".repeat(70)}${colors.reset}
 `);
         suggestions.forEach((item, idx) => {
           if (idx === selectedIndex) {
-            stdout.write(`${colors.orange}> ${item.command}${colors.reset} ${colors.dim}- ${item.description}${colors.reset}`);
+            stdout.write(`${colors.orange}\u25B8 ${colors.bold}${item.command.padEnd(18)}${colors.reset} ${colors.dim}\u2502${colors.reset} ${item.description}${colors.reset}`);
           } else {
-            stdout.write(`  ${colors.dim}${item.command} - ${item.description}${colors.reset}`);
+            stdout.write(`  ${colors.dim}${item.command.padEnd(18)} \u2502 ${item.description}${colors.reset}`);
           }
           if (idx < suggestions.length - 1) {
             stdout.write(`
 `);
           }
         });
-        lastDrawnSuggestions = suggestions.length;
-        readline.moveCursor(stdout, 0, -suggestions.length);
+        stdout.write(`
+${colors.dim}${"\u2500".repeat(70)}${colors.reset}`);
+        lastDrawnSuggestions = suggestions.length + 2;
+        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
+        readline.cursorTo(stdout, inputEndCol);
+      } else if (completionMode === "path" && pathCompletions.length > 0) {
+        stdout.write(`
+`);
+        const maxDisplay = Math.min(pathCompletions.length, 10);
+        for (let i = 0;i < maxDisplay; i++) {
+          const completion = pathCompletions[i];
+          if (i === selectedIndex) {
+            stdout.write(`${colors.cyan}\u25B8 ${completion}${colors.reset}`);
+          } else {
+            stdout.write(`  ${colors.dim}${completion}${colors.reset}`);
+          }
+          if (i < maxDisplay - 1) {
+            stdout.write(`
+`);
+          }
+        }
+        if (pathCompletions.length > maxDisplay) {
+          stdout.write(`
+${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
+          lastDrawnSuggestions = maxDisplay + 1;
+        } else {
+          lastDrawnSuggestions = maxDisplay;
+        }
+        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
         readline.cursorTo(stdout, inputEndCol);
       } else {
         lastDrawnSuggestions = 0;
       }
     };
     const updateSuggestions = () => {
-      const hadSuggestions = suggestions.length > 0;
+      const hadSuggestions = suggestions.length > 0 || pathCompletions.length > 0;
       if (input.startsWith("/") && input.length >= 1) {
+        completionMode = "meta";
+        pathCompletions = [];
         suggestions = META_COMMANDS.filter((cmd) => cmd.command.startsWith(input));
         if (suggestions.length > 0 && !hadSuggestions) {
           selectedIndex = 0;
@@ -5100,16 +5703,40 @@ async function readLineWithAutocomplete(prompt, rl) {
         }
       } else {
         suggestions = [];
+        completionMode = null;
+        pathCompletions = [];
         selectedIndex = -1;
       }
+    };
+    const updatePathCompletions = () => {
+      const words = input.split(/\s+/);
+      if (words.length === 0) {
+        pathCompletions = [];
+        return;
+      }
+      const lastWord = words[words.length - 1] || "";
+      if (lastWord.length === 0 && words.length === 1) {
+        pathCompletions = [];
+        return;
+      }
+      pathCompletions = getPathCompletions(lastWord);
+      completionMode = pathCompletions.length > 0 ? "path" : null;
+      selectedIndex = pathCompletions.length > 0 ? 0 : -1;
     };
     const onKeypress = (str, key) => {
       if (!key)
         return;
       if (key.name === "return" || key.name === "enter") {
         let result = input;
-        if (suggestions.length > 0 && selectedIndex >= 0 && selectedIndex < suggestions.length) {
+        if (completionMode === "meta" && suggestions.length > 0 && selectedIndex >= 0 && selectedIndex < suggestions.length) {
           result = suggestions[selectedIndex].command;
+          readline.cursorTo(stdout, 0);
+          readline.clearLine(stdout, 0);
+          stdout.write(prompt + result);
+        } else if (completionMode === "path" && pathCompletions.length > 0 && selectedIndex >= 0 && selectedIndex < pathCompletions.length) {
+          const words = input.split(/\s+/);
+          words[words.length - 1] = pathCompletions[selectedIndex];
+          result = words.join(" ");
           readline.cursorTo(stdout, 0);
           readline.clearLine(stdout, 0);
           stdout.write(prompt + result);
@@ -5152,12 +5779,16 @@ async function readLineWithAutocomplete(prompt, rl) {
       if (key.name === "backspace") {
         if (key.meta) {
           input = "";
+          pathCompletions = [];
+          completionMode = null;
           updateSuggestions();
           redraw();
           return;
         }
         if (input.length > 0) {
           input = input.slice(0, -1);
+          pathCompletions = [];
+          completionMode = null;
           updateSuggestions();
           redraw();
         }
@@ -5165,39 +5796,64 @@ async function readLineWithAutocomplete(prompt, rl) {
       }
       if (key.ctrl && key.name === "u") {
         input = "";
+        pathCompletions = [];
+        completionMode = null;
         updateSuggestions();
         redraw();
         return;
       }
       if (key.ctrl && key.name === "k") {
         input = "";
+        pathCompletions = [];
+        completionMode = null;
         updateSuggestions();
         redraw();
         return;
       }
       if (key.name === "up") {
-        if (suggestions.length > 0) {
-          selectedIndex = selectedIndex <= 0 ? suggestions.length - 1 : selectedIndex - 1;
+        const maxItems = completionMode === "meta" ? suggestions.length : pathCompletions.length;
+        if (maxItems > 0) {
+          selectedIndex = selectedIndex <= 0 ? maxItems - 1 : selectedIndex - 1;
           redraw();
         }
         return;
       }
       if (key.name === "down") {
-        if (suggestions.length > 0) {
-          selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+        const maxItems = completionMode === "meta" ? suggestions.length : pathCompletions.length;
+        if (maxItems > 0) {
+          selectedIndex = selectedIndex >= maxItems - 1 ? 0 : selectedIndex + 1;
           redraw();
         }
         return;
       }
       if (key.name === "tab") {
-        if (suggestions.length > 0) {
+        if (completionMode === "meta" && suggestions.length > 0) {
           selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          redraw();
+        } else if (completionMode === "path" && pathCompletions.length > 0) {
+          if (pathCompletions.length === 1) {
+            const words = input.split(/\s+/);
+            words[words.length - 1] = pathCompletions[0];
+            input = words.join(" ");
+            pathCompletions = [];
+            completionMode = null;
+            selectedIndex = -1;
+            updateSuggestions();
+            redraw();
+          } else {
+            selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+            redraw();
+          }
+        } else {
+          updatePathCompletions();
           redraw();
         }
         return;
       }
       if (str && !key.ctrl && !key.meta) {
         input += str;
+        pathCompletions = [];
+        completionMode = null;
         updateSuggestions();
         redraw();
       }
@@ -5219,9 +5875,21 @@ async function startRepl(initialConfig) {
     conversationHistory: []
   };
   await showWhisperAsciiArt();
-  console.log(`${colors.bold}Natural Language Terminal Assistant${colors.reset}`);
-  console.log(`Type "/help" for usage, "/exit" to quit
+  console.log(`${colors.bold}Whisper${colors.reset} ${colors.dim}v${VERSION}${colors.reset}`);
+  console.log(`${colors.dim}Natural Language Terminal Assistant${colors.reset}`);
+  const currentModel = getModelById(state.config.selected_model);
+  if (currentModel) {
+    console.log(`${colors.dim}Model: ${currentModel.name} (use "/models" to change)${colors.reset}`);
+  } else {
+    console.log(`${colors.dim}Model: ${state.config.selected_model} (use "/models" to change)${colors.reset}`);
+  }
+  console.log(`${colors.slate}Type ${colors.accent}/help${colors.reset}${colors.slate} for usage, ${colors.accent}/exit${colors.reset}${colors.slate} to quit${colors.reset}
 `);
+  if (!state.config.first_run_complete) {
+    showFirstRunTips();
+    state.config.first_run_complete = true;
+    await saveConfig(state.config);
+  }
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -5246,81 +5914,121 @@ ${colors.yellow}Arm mode expired${colors.reset}
       }
       continue;
     }
-    try {
-      const spinner = createSpinner();
-      let cancelled = false;
-      const abortController = new AbortController;
-      const stdin = process.stdin;
-      const onKeypress = (str, key) => {
-        if (key && key.name === "escape") {
-          cancelled = true;
-          abortController.abort();
-          spinner.stop();
-          stdin.setRawMode(false);
-          stdin.removeListener("keypress", onKeypress);
-          console.log(`${colors.yellow}Cancelled${colors.reset}
-`);
-        }
-      };
-      readline.emitKeypressEvents(stdin);
-      if (stdin.isTTY) {
-        stdin.setRawMode(true);
+    const commonCommands = [
+      "ls",
+      "cd",
+      "pwd",
+      "cat",
+      "echo",
+      "grep",
+      "find",
+      "ps",
+      "top",
+      "kill",
+      "mv",
+      "cp",
+      "rm",
+      "mkdir",
+      "rmdir",
+      "touch",
+      "chmod",
+      "chown",
+      "git",
+      "npm",
+      "yarn",
+      "bun",
+      "node",
+      "python",
+      "pip",
+      "curl",
+      "wget",
+      "ssh",
+      "scp",
+      "rsync",
+      "tar",
+      "zip",
+      "unzip",
+      "vim",
+      "nano",
+      "emacs",
+      "less",
+      "more",
+      "head",
+      "tail",
+      "df",
+      "du",
+      "free",
+      "uptime",
+      "who",
+      "whoami",
+      "date",
+      "export",
+      "env",
+      "printenv",
+      "which",
+      "whereis",
+      "man",
+      "history",
+      "clear",
+      "exit"
+    ];
+    const words = userInput.trim().split(/\s+/);
+    const firstWord = words[0];
+    const naturalLanguagePronouns = ["it", "that", "this", "them", "those", "these", "here", "there"];
+    const hasNaturalLanguage = words.slice(1).some((word) => naturalLanguagePronouns.includes(word.toLowerCase()));
+    const isDirectCommand = commonCommands.includes(firstWord) && !hasNaturalLanguage;
+    if (firstWord === "cd") {
+      const args = userInput.trim().split(/\s+/).slice(1);
+      let targetDir = args[0] || __require("os").homedir();
+      const home = __require("os").homedir();
+      if (targetDir === "~") {
+        targetDir = home;
+      } else if (targetDir.startsWith("~/")) {
+        targetDir = targetDir.replace("~", home);
       }
-      stdin.on("keypress", onKeypress);
-      spinner.start("Thinking");
-      let response;
       try {
-        response = await generateCommand(userInput, context, state.config.default_model, state.config.fallback_model, state.conversationHistory);
-      } catch (error) {
-        spinner.stop();
-        if (stdin.isTTY && stdin.setRawMode) {
-          stdin.setRawMode(false);
-        }
-        stdin.removeListener("keypress", onKeypress);
-        if (cancelled) {
+        const path = __require("path");
+        const resolvedPath = path.resolve(process.cwd(), targetDir);
+        const fs = __require("fs");
+        if (!fs.existsSync(resolvedPath)) {
+          console.log(`${colors.red}\u2717 Directory not found:${colors.reset} ${targetDir}
+`);
           continue;
         }
-        throw error;
-      }
-      spinner.stop();
-      if (stdin.isTTY && stdin.setRawMode) {
-        stdin.setRawMode(false);
-      }
-      stdin.removeListener("keypress", onKeypress);
-      if (cancelled) {
-        continue;
-      }
-      if (response.message) {
-        showBoxedMessage(response.message);
-        state.conversationHistory.push({ role: "user", content: userInput });
-        state.conversationHistory.push({ role: "assistant", content: response.message });
-        if (state.conversationHistory.length > 20) {
-          state.conversationHistory = state.conversationHistory.slice(-20);
-        }
-        continue;
-      }
-      if (!response.command || !response.explanation) {
-        console.log(`
-${colors.red}Error: Invalid response from LLM${colors.reset}
+        const stats = fs.statSync(resolvedPath);
+        if (!stats.isDirectory()) {
+          console.log(`${colors.red}\u2717 Not a directory:${colors.reset} ${targetDir}
 `);
-        continue;
+          continue;
+        }
+        process.chdir(resolvedPath);
+        console.log(`${colors.green}\u2713${colors.reset} ${colors.dim}Changed directory to ${process.cwd()}${colors.reset}
+`);
+      } catch (error) {
+        console.log(`${colors.red}\u2717 Failed to change directory:${colors.reset} ${error}
+`);
       }
-      const { command, explanation, exit_codes } = response;
-      state.conversationHistory.push({ role: "user", content: userInput });
-      state.conversationHistory.push({
-        role: "assistant",
-        content: `Command: ${command}
-Explanation: ${explanation}`
-      });
-      if (state.conversationHistory.length > 20) {
-        state.conversationHistory = state.conversationHistory.slice(-20);
-      }
+      continue;
+    }
+    if (isDirectCommand) {
+      const command = userInput;
+      const explanation = `Direct shell command: ${command}`;
       const policy = evaluatePolicy(command, state.config, state.armMode);
       if (!policy.allowed) {
         console.log(`
 ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
         if (policy.blockingRule) {
-          console.log(`${colors.dim}Rule: ${policy.blockingRule}${colors.reset}`);
+          console.log(`${colors.dim}Rule: ${policy.blockingRule}${colors.reset}
+`);
+        }
+        if (policy.riskLevel === "DANGEROUS" /* DANGEROUS */ && !state.armMode) {
+          console.log(`${colors.bold}To enable dangerous commands:${colors.reset}`);
+          console.log(`  \u2022 Use ${colors.cyan}/arm${colors.reset} to enable for 60 seconds`);
+          console.log(`  \u2022 Use ${colors.cyan}/dry${colors.reset} to preview the command without executing
+`);
+        } else {
+          console.log(`${colors.dim}This command was blocked by your safety rules.${colors.reset}
+`);
         }
         await logAuditEntry({
           timestamp: new Date().toISOString(),
@@ -5338,8 +6046,6 @@ ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
       let confirmed = true;
       if (policy.requiresConfirmation) {
         confirmed = await askConfirmation(rl, command, explanation, policy.riskLevel);
-      } else {
-        console.log(`${colors.dim}\u2192 ${command}${colors.reset}`);
       }
       if (!confirmed) {
         console.log(`${colors.yellow}Cancelled${colors.reset}`);
@@ -5370,9 +6076,173 @@ ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
           armMode: state.armMode
         });
       } else {
-        console.log();
+        showOutputSeparator("Output");
         const result = await executeCommand(command, state.config);
-        console.log();
+        console.log(`${colors.dim}${"\u2500".repeat(75)}${colors.reset}`);
+        const statusIcon = result.exitCode === 0 ? `${colors.green}\u2713${colors.reset}` : `${colors.red}\u2717${colors.reset}`;
+        const exitMessage = result.exitCode === 0 ? "Success" : `Exit code: ${result.exitCode}`;
+        console.log(`${statusIcon} ${exitMessage} ${colors.dim}(${result.duration}ms)${colors.reset}`);
+        if (result.timedOut) {
+          console.log(`${colors.yellow}\u26A0 Command timed out${colors.reset}`);
+        }
+        await logAuditEntry({
+          timestamp: new Date().toISOString(),
+          userInput,
+          command,
+          explanation,
+          riskLevel: policy.riskLevel,
+          allowed: true,
+          executed: true,
+          exitCode: result.exitCode,
+          duration: result.duration,
+          dryRun: false,
+          armMode: state.armMode
+        });
+      }
+      console.log();
+      continue;
+    }
+    try {
+      const spinner = createSpinner();
+      let cancelled = false;
+      const abortController = new AbortController;
+      const stdin = process.stdin;
+      const onKeypress = (str, key) => {
+        if (key && key.name === "escape") {
+          cancelled = true;
+          abortController.abort();
+          spinner.stop();
+          stdin.setRawMode(false);
+          stdin.removeListener("keypress", onKeypress);
+          console.log(`${colors.yellow}Cancelled${colors.reset}
+`);
+        }
+      };
+      readline.emitKeypressEvents(stdin);
+      if (stdin.isTTY) {
+        stdin.setRawMode(true);
+      }
+      stdin.on("keypress", onKeypress);
+      spinner.start("Thinking");
+      let response;
+      try {
+        response = await generateCommand(userInput, context, state.config.selected_model, state.config.fallback_model, state.conversationHistory);
+      } catch (error) {
+        spinner.stop();
+        if (stdin.isTTY && stdin.setRawMode) {
+          stdin.setRawMode(false);
+        }
+        stdin.removeListener("keypress", onKeypress);
+        if (cancelled) {
+          continue;
+        }
+        throw error;
+      }
+      spinner.stop();
+      if (stdin.isTTY && stdin.setRawMode) {
+        stdin.setRawMode(false);
+      }
+      stdin.removeListener("keypress", onKeypress);
+      if (cancelled) {
+        continue;
+      }
+      if (response.message) {
+        showBoxedMessage(response.message);
+        state.conversationHistory.push({ role: "user", content: userInput });
+        state.conversationHistory.push({ role: "assistant", content: response.message });
+        if (state.conversationHistory.length > 20) {
+          state.conversationHistory = state.conversationHistory.slice(-20);
+        }
+        continue;
+      }
+      if (!response.command || !response.explanation) {
+        console.log(`
+${colors.red}\u2717 Error: Invalid response from LLM${colors.reset}`);
+        console.log(`${colors.dim}The model couldn't generate a valid command.${colors.reset}
+`);
+        console.log(`${colors.bold}Try:${colors.reset}`);
+        console.log(`  \u2022 Rephrase your request more specifically`);
+        console.log(`  \u2022 Use ${colors.cyan}/models${colors.reset} to switch to a different model`);
+        console.log(`  \u2022 Check ${colors.cyan}/history${colors.reset} for examples of successful commands
+`);
+        continue;
+      }
+      const { command, explanation, exit_codes } = response;
+      state.conversationHistory.push({ role: "user", content: userInput });
+      state.conversationHistory.push({
+        role: "assistant",
+        content: `Command: ${command}
+Explanation: ${explanation}`
+      });
+      if (state.conversationHistory.length > 20) {
+        state.conversationHistory = state.conversationHistory.slice(-20);
+      }
+      const policy = evaluatePolicy(command, state.config, state.armMode);
+      if (!policy.allowed) {
+        console.log(`
+${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
+        if (policy.blockingRule) {
+          console.log(`${colors.dim}Rule: ${policy.blockingRule}${colors.reset}
+`);
+        }
+        if (policy.riskLevel === "DANGEROUS" /* DANGEROUS */ && !state.armMode) {
+          console.log(`${colors.bold}To enable dangerous commands:${colors.reset}`);
+          console.log(`  \u2022 Use ${colors.cyan}/arm${colors.reset} to enable for 60 seconds`);
+          console.log(`  \u2022 Use ${colors.cyan}/dry${colors.reset} to preview the command without executing
+`);
+        } else {
+          console.log(`${colors.dim}This command was blocked by your safety rules.${colors.reset}
+`);
+        }
+        await logAuditEntry({
+          timestamp: new Date().toISOString(),
+          userInput,
+          command,
+          explanation,
+          riskLevel: policy.riskLevel,
+          allowed: false,
+          executed: false,
+          dryRun: state.dryRun,
+          armMode: state.armMode
+        });
+        continue;
+      }
+      let confirmed = true;
+      if (policy.requiresConfirmation) {
+        confirmed = await askConfirmation(rl, command, explanation, policy.riskLevel);
+      }
+      if (!confirmed) {
+        console.log(`${colors.yellow}Cancelled${colors.reset}`);
+        await logAuditEntry({
+          timestamp: new Date().toISOString(),
+          userInput,
+          command,
+          explanation,
+          riskLevel: policy.riskLevel,
+          allowed: true,
+          executed: false,
+          dryRun: state.dryRun,
+          armMode: state.armMode
+        });
+        continue;
+      }
+      if (state.dryRun) {
+        console.log(`${colors.orange}[DRY RUN]${colors.reset} Would execute: ${command}`);
+        await logAuditEntry({
+          timestamp: new Date().toISOString(),
+          userInput,
+          command,
+          explanation,
+          riskLevel: policy.riskLevel,
+          allowed: true,
+          executed: false,
+          dryRun: true,
+          armMode: state.armMode
+        });
+      } else {
+        showOutputSeparator("Output");
+        const result = await executeCommand(command, state.config);
+        console.log(`${colors.dim}${"\u2500".repeat(75)}${colors.reset}`);
         const statusIcon = result.exitCode === 0 ? `${colors.green}\u2713${colors.reset}` : `${colors.red}\u2717${colors.reset}`;
         let exitMessage = `Exit code: ${result.exitCode}`;
         if (exit_codes && exit_codes[result.exitCode.toString()]) {
@@ -5397,7 +6267,26 @@ ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
         });
       }
     } catch (error) {
-      console.error(`${colors.red}Error:${colors.reset} ${error}`);
+      console.log(`
+${colors.red}\u2717 Error:${colors.reset} ${error}
+`);
+      const errorStr = String(error).toLowerCase();
+      console.log(`${colors.bold}Troubleshooting:${colors.reset}`);
+      if (errorStr.includes("api") || errorStr.includes("key") || errorStr.includes("unauthorized")) {
+        console.log(`  \u2022 Check your API key with ${colors.cyan}/key${colors.reset}`);
+        console.log(`  \u2022 Verify you have credits at ${colors.cyan}https://openrouter.ai${colors.reset}`);
+      } else if (errorStr.includes("timeout")) {
+        console.log(`  \u2022 The request timed out - try again`);
+        console.log(`  \u2022 Consider using a faster model with ${colors.cyan}/models${colors.reset}`);
+      } else if (errorStr.includes("network") || errorStr.includes("fetch")) {
+        console.log(`  \u2022 Check your internet connection`);
+        console.log(`  \u2022 OpenRouter API may be temporarily unavailable`);
+      } else {
+        console.log(`  \u2022 Try rephrasing your request`);
+        console.log(`  \u2022 Use ${colors.cyan}/help${colors.reset} for usage information`);
+        console.log(`  \u2022 Use ${colors.cyan}/clear${colors.reset} to reset conversation history`);
+      }
+      console.log();
     }
     console.log();
   }

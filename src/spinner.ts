@@ -1,10 +1,11 @@
-// Sleek loading animation with orange color
+// Sleek loading animation with papaya orange accent
 
-const ORANGE = "\x1b[38;5;208m";
+const ACCENT = "\x1b[38;5;214m";
+const MUTED = "\x1b[38;5;245m";
 const RESET = "\x1b[0m";
 
 class LoadingSpinner {
-  private frames = ["▱▱▱▱▱", "▰▱▱▱▱", "▰▰▱▱▱", "▰▰▰▱▱", "▰▰▰▰▱", "▰▰▰▰▰", "▱▰▰▰▰", "▱▱▰▰▰", "▱▱▱▰▰", "▱▱▱▱▰"];
+  private frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private currentFrame = 0;
   private intervalId: Timer | null = null;
   private isRunning = false;
@@ -29,7 +30,7 @@ class LoadingSpinner {
 
   private render(message: string): void {
     const frame = this.frames[this.currentFrame];
-    process.stdout.write(`\r${ORANGE}${frame}${RESET} ${message}...`);
+    process.stdout.write(`\r${ACCENT}${frame}${RESET} ${message}${MUTED}…${RESET}`);
   }
 
   stop(): void {

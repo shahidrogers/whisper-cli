@@ -135,7 +135,7 @@ Rules:
 - For port searches, use specific ports (lsof -i :8080) or pipe to grep (lsof -i -P -n | grep)`;
 }
 
-// Parse JSON response, handling markdown code blocks
+// Parse JSON response, handling markdown code blocks and extra text.
 function parseJSONResponse(text: string): unknown {
   // Strip markdown code blocks if present
   let cleaned = text.trim();
@@ -145,7 +145,25 @@ function parseJSONResponse(text: string): unknown {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
 
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Fallback: try to recover a JSON object if the model added extra text.
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      const extracted = cleaned.slice(start, end + 1);
+      return JSON.parse(extracted);
+    }
+    throw new Error("Failed to parse JSON response from the model.");
+  }
+}
+
+function formatAttemptError(attemptLabel: string, error: unknown): string {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const indented = message.replace(/\n/g, "\n  ");
+  return `${attemptLabel}\n  ${indented}`;
 }
 
 // Call OpenRouter API
@@ -234,7 +252,7 @@ export async function generateCommand(
     const parsed = parseJSONResponse(responseText);
     return CommandResponseSchema.parse(parsed);
   } catch (error) {
-    console.error("Attempt 1 failed:", error);
+    console.error(formatAttemptError("Attempt 1 failed:", error));
   }
 
   // Attempt 2: Re-prompt with stricter instruction
@@ -254,7 +272,7 @@ IMPORTANT: Your response must be ONLY valid JSON. Do not include any text before
     const parsed = parseJSONResponse(responseText);
     return CommandResponseSchema.parse(parsed);
   } catch (error) {
-    console.error("Attempt 2 failed:", error);
+    console.error(formatAttemptError("Attempt 2 failed:", error));
   }
 
   // Attempt 3: Fallback model
@@ -270,8 +288,10 @@ IMPORTANT: Your response must be ONLY valid JSON. Do not include any text before
     const parsed = parseJSONResponse(responseText);
     return CommandResponseSchema.parse(parsed);
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
     throw new Error(
-      `All 3 attempts failed to generate a valid command. Last error: ${error}`
+      `All 3 attempts failed to generate a valid command.\n  Last error: ${message}`
     );
   }
 }
