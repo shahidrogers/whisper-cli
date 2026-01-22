@@ -24,7 +24,7 @@ A natural language terminal assistant that converts your intentions into safe sh
 ### Install via npm (Recommended)
 
 ```bash
-npm install -g whisper-cli
+npm install -g @shahidrogers/whisper-cli
 ```
 
 That's it! Now you can run `whisper` from any directory.
@@ -43,7 +43,7 @@ cd whisper-cli
 ### Uninstall
 
 ```bash
-npm uninstall -g whisper-cli
+npm uninstall -g @shahidrogers/whisper-cli
 ```
 
 ## Quick Start
