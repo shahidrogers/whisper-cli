@@ -1,7 +1,7 @@
 {
   "name": "whisper-cli",
   "version": "0.1.0",
-  "description": "Natural language terminal assistant that converts speech to safe shell commands",
+  "description": "Natural language terminal assistant that converts your intentions into safe shell commands",
   "type": "module",
   "bin": {
     "whisper": "./dist/index.js"
@@ -10,7 +10,8 @@
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "test": "bun test",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
   },
   "keywords": [
     "cli",
@@ -18,10 +19,29 @@
     "assistant",
     "ai",
     "shell",
-    "natural-language"
+    "natural-language",
+    "llm",
+    "openrouter",
+    "command-line",
+    "automation",
+    "safety"
   ],
-  "author": "",
+  "author": "Shahid Rogers",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shahidrogers/whisper-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shahidrogers/whisper-cli/issues"
+  },
+  "homepage": "https://github.com/shahidrogers/whisper-cli#readme",
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
   "dependencies": {
     "zod": "^3.22.4"
   },
