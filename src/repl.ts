@@ -83,6 +83,20 @@ function wrapWords(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
+function enterAltScreen(stdout: NodeJS.WriteStream): boolean {
+  if (!stdout.isTTY) return false;
+  const term = process.env.TERM ?? "";
+  if (!term || term === "dumb") return false;
+  // Support multiple alt-screen sequences for broader terminal compatibility.
+  stdout.write("\x1b[?1049h\x1b[?1047h\x1b[?47h\x1b[?25l");
+  return true;
+}
+
+function exitAltScreen(stdout: NodeJS.WriteStream): void {
+  // Restore cursor visibility and main screen.
+  stdout.write("\x1b[?25h\x1b[?47l\x1b[?1047l\x1b[?1049l");
+}
+
 // Risk level badges
 function getRiskBadge(risk: RiskLevel): string {
   switch (risk) {
@@ -348,11 +362,7 @@ async function showHistoryInteractive(rl: readline.Interface): Promise<void> {
 
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const useAltScreen = Boolean(stdout.isTTY);
-  if (useAltScreen) {
-    // Alternate screen prevents scrollback spam during interactive menus.
-    stdout.write("\x1b[?1049h\x1b[?25l");
-  }
+  const useAltScreen = enterAltScreen(stdout);
 
   const filterEntries = (query: string) => {
     if (!query) return allEntries;
@@ -436,7 +446,7 @@ async function showHistoryInteractive(rl: readline.Interface): Promise<void> {
       }
       // Restore main screen and cursor.
       if (useAltScreen) {
-        stdout.write("\x1b[?1049l\x1b[?25h");
+        exitAltScreen(stdout);
       } else {
         stdout.write("\x1b[2J\x1b[H");
       }
@@ -518,35 +528,36 @@ async function promptModelSelection(state: ReplState, rl: readline.Interface): P
   let index = Math.max(0, models.findIndex((model) => model.id === state.config.selected_model));
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const useAltScreen = Boolean(stdout.isTTY);
-  if (useAltScreen) {
-    // Alternate screen prevents scrollback spam during interactive menus.
-    stdout.write("\x1b[?1049h\x1b[?25l");
-  }
+  const useAltScreen = enterAltScreen(stdout);
 
-  const render = () => {
+  const formatModelLine = (model: (typeof models)[number], isSelected: boolean): string => {
+    const marker = isSelected ? "→" : " ";
+    const recommended = model.recommended ? ` ${colors.green}★${colors.reset}` : "";
+    const lineColor = isSelected ? colors.accent : "";
+    const price = model.pricePer1MTokens === 0 ? "free" : `$${model.pricePer1MTokens}/1M`;
+
+    return `${lineColor}${marker} ${model.name}${recommended}${colors.reset} ${colors.dim}· ${model.speed} · ${price}${colors.reset}`;
+  };
+
+  const listStartRow = 3; // 0-based row index where the model list begins
+
+  const renderInitial = () => {
     stdout.write("\x1b[2J\x1b[H");
-    console.log(`${colors.bold}Select a model:${colors.reset}`);
-    console.log(
-      `${colors.dim}Use ↑/↓ to move, Enter to select, Esc to cancel${colors.reset}\n`
-    );
+    stdout.write(`${colors.bold}Select a model:${colors.reset}\n`);
+    stdout.write(`${colors.dim}Use ↑/↓ to move, Enter to select, Esc to cancel${colors.reset}\n\n`);
 
     for (let i = 0; i < models.length; i += 1) {
-      const model = models[i];
-      const isSelected = i === index;
-      const marker = isSelected ? "→" : " ";
-      const recommended = model.recommended ? ` ${colors.green}★${colors.reset}` : "";
-      const lineColor = isSelected ? colors.accent : "";
-
-      // Price display
-      const price = model.pricePer1MTokens === 0 ? "free" : `$${model.pricePer1MTokens}/1M`;
-
-      // Compact single line display
-      console.log(
-        `${lineColor}${marker} ${model.name}${recommended}${colors.reset} ${colors.dim}· ${model.speed} · ${price}${colors.reset}`
-      );
+      stdout.write(formatModelLine(models[i], i === index) + "\n");
     }
-    console.log();
+    stdout.write("\n");
+  };
+
+  const redrawLine = (lineIndex: number, isSelected: boolean) => {
+    if (lineIndex < 0 || lineIndex >= models.length) return;
+    readline.cursorTo(stdout, 0, listStartRow + lineIndex);
+    readline.clearLine(stdout, 0);
+    stdout.write(formatModelLine(models[lineIndex], isSelected));
+    readline.cursorTo(stdout, 0, listStartRow + models.length + 1);
   };
 
   const selected = await new Promise<(typeof models)[number] | null>((resolve) => {
@@ -557,7 +568,7 @@ async function promptModelSelection(state: ReplState, rl: readline.Interface): P
       }
       // Restore main screen and cursor.
       if (useAltScreen) {
-        stdout.write("\x1b[?1049l\x1b[?25h");
+        exitAltScreen(stdout);
       } else {
         stdout.write("\x1b[2J\x1b[H");
       }
@@ -570,13 +581,17 @@ async function promptModelSelection(state: ReplState, rl: readline.Interface): P
 
     const onKeypress = (_str: string, key: { name?: string }) => {
       if (key?.name === "up") {
+        const prevIndex = index;
         index = (index - 1 + models.length) % models.length;
-        render();
+        redrawLine(prevIndex, false);
+        redrawLine(index, true);
         return;
       }
       if (key?.name === "down") {
+        const prevIndex = index;
         index = (index + 1) % models.length;
-        render();
+        redrawLine(prevIndex, false);
+        redrawLine(index, true);
         return;
       }
       if (key?.name === "return") {
@@ -593,7 +608,7 @@ async function promptModelSelection(state: ReplState, rl: readline.Interface): P
       stdin.setRawMode(true);
     }
     stdin.on("keypress", onKeypress);
-    render();
+    renderInitial();
   });
 
   if (!selected) {
@@ -809,11 +824,12 @@ async function readLineWithAutocomplete(
 ): Promise<string> {
   return new Promise((resolve) => {
     let input = "";
+    let originalInput = ""; // Store original input before navigating suggestions
     let selectedIndex = -1;
     let suggestions: Array<{ command: string; description: string }> = [];
     let pathCompletions: string[] = [];
-    let lastDrawnSuggestions = 0;
     let completionMode: "meta" | "path" | null = null;
+    let suggestionsVisible = false;
 
     const stdin = process.stdin;
     const stdout = process.stdout;
@@ -822,37 +838,22 @@ async function readLineWithAutocomplete(
     stdout.write(prompt);
 
     const redraw = () => {
-      // Save cursor position (we should be at end of input)
-      const inputEndCol = prompt.length + input.length;
-
-      // If we drew suggestions before, clear them
-      if (lastDrawnSuggestions > 0) {
-        // Move down to first suggestion line (without creating new line)
-        readline.moveCursor(stdout, 0, 1);
-        // Clear all suggestion lines
-        for (let i = 0; i < lastDrawnSuggestions; i++) {
-          readline.clearLine(stdout, 0);
-          if (i < lastDrawnSuggestions - 1) {
-            readline.moveCursor(stdout, 0, 1);
-          }
-        }
-        // Move back up to input line
-        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        // Position at beginning of input line
-        readline.cursorTo(stdout, 0);
-      } else {
-        // Just go to beginning of current line
-        readline.cursorTo(stdout, 0);
+      if (stdin.isTTY) {
+        stdin.setRawMode(false);
       }
-
-      // Clear the input line
-      readline.clearLine(stdout, 0);
+      // Move to start of line and clear everything from there
+      stdout.write("\r"); // Carriage return to beginning of line
+      stdout.write("\x1b[K"); // Clear from cursor to end of line
+      stdout.write("\x1b[J"); // Clear from cursor to end of screen
 
       // Redraw prompt and input
       stdout.write(prompt + input);
 
       // Show suggestions if any
+      suggestionsVisible = false;
       if (completionMode === "meta" && suggestions.length > 0) {
+        suggestionsVisible = true;
+        stdout.write("\x1b[s");
         stdout.write("\n");
         stdout.write(`${colors.dim}${'─'.repeat(70)}${colors.reset}\n`);
         suggestions.forEach((item, idx) => {
@@ -866,15 +867,10 @@ async function readLineWithAutocomplete(
           }
         });
         stdout.write(`\n${colors.dim}${'─'.repeat(70)}${colors.reset}`);
-
-        // +3 accounts for the blank line plus two separator lines.
-        lastDrawnSuggestions = suggestions.length + 3;
-
-        // Move cursor back up to input line
-        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        // Position at end of input
-        readline.cursorTo(stdout, inputEndCol);
+        stdout.write("\x1b[u");
       } else if (completionMode === "path" && pathCompletions.length > 0) {
+        suggestionsVisible = true;
+        stdout.write("\x1b[s");
         stdout.write("\n");
         const maxDisplay = Math.min(pathCompletions.length, 10);
         for (let i = 0; i < maxDisplay; i++) {
@@ -890,19 +886,11 @@ async function readLineWithAutocomplete(
         }
         if (pathCompletions.length > maxDisplay) {
           stdout.write(`\n${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
-          // +2 accounts for the blank line plus the "... more" line.
-          lastDrawnSuggestions = maxDisplay + 2;
-        } else {
-          // +1 accounts for the blank line before the list.
-          lastDrawnSuggestions = maxDisplay + 1;
         }
-
-        // Move cursor back up to input line
-        readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-        // Position at end of input
-        readline.cursorTo(stdout, inputEndCol);
-      } else {
-        lastDrawnSuggestions = 0;
+        stdout.write("\x1b[u");
+      }
+      if (stdin.isTTY) {
+        stdin.setRawMode(true);
       }
     };
 
@@ -915,19 +903,22 @@ async function readLineWithAutocomplete(
         pathCompletions = [];
         suggestions = META_COMMANDS.filter((cmd) => cmd.command.startsWith(input));
 
-        // If suggestions just appeared, select first item
+        // If suggestions just appeared, save original input and don't select anything yet
         if (suggestions.length > 0 && !hadSuggestions) {
-          selectedIndex = 0;
+          originalInput = input;
+          selectedIndex = -1; // Don't auto-select
         } else if (suggestions.length > 0 && selectedIndex >= suggestions.length) {
           selectedIndex = suggestions.length - 1;
         } else if (suggestions.length === 0) {
           selectedIndex = -1;
+          originalInput = "";
         }
       } else {
         suggestions = [];
         completionMode = null;
         pathCompletions = [];
         selectedIndex = -1;
+        originalInput = "";
       }
     };
 
@@ -949,60 +940,34 @@ async function readLineWithAutocomplete(
       }
 
       pathCompletions = getPathCompletions(lastWord);
-      completionMode = pathCompletions.length > 0 ? "path" : null;
-      selectedIndex = pathCompletions.length > 0 ? 0 : -1;
+      if (pathCompletions.length > 0) {
+        completionMode = "path";
+        originalInput = input; // Save original before navigating
+        selectedIndex = -1; // Don't auto-select
+      } else {
+        completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
+      }
     };
 
     const onKeypress = (str: string, key: any) => {
       if (!key) return;
 
       if (key.name === "return" || key.name === "enter") {
-        // Store result before clearing
-        let result = input;
-        let appliedCompletion = false;
-        let shouldRedrawLine = false;
+        // Just submit whatever is currently in input
+        const result = input;
 
-        // If we have meta suggestions and one is selected, use it
-        if (completionMode === "meta" && suggestions.length > 0 && selectedIndex >= 0 && selectedIndex < suggestions.length) {
-          result = suggestions[selectedIndex].command;
-          appliedCompletion = result !== input;
-        } else if (completionMode === "path" && pathCompletions.length > 0 && selectedIndex >= 0 && selectedIndex < pathCompletions.length) {
-          // If we have path completions and one is selected, use it
-          const words = input.split(/\s+/);
-          words[words.length - 1] = pathCompletions[selectedIndex];
-          result = words.join(" ");
-          appliedCompletion = true;
-        }
-
-        // Clear suggestions if any
-        if (lastDrawnSuggestions > 0) {
-          readline.moveCursor(stdout, 0, 1);
-          for (let i = 0; i < lastDrawnSuggestions; i++) {
-            readline.clearLine(stdout, 0);
-            if (i < lastDrawnSuggestions - 1) {
-              readline.moveCursor(stdout, 0, 1);
-            }
-          }
-          readline.moveCursor(stdout, 0, -lastDrawnSuggestions);
-          lastDrawnSuggestions = 0;
-          shouldRedrawLine = true;
-        }
-
-        if (appliedCompletion) {
-          input = result;
-          shouldRedrawLine = true;
-        }
-
-        // Redraw only if we modified the line or cleared suggestions.
-        if (shouldRedrawLine) {
-          readline.cursorTo(stdout, 0);
-          readline.clearLine(stdout, 0);
-          stdout.write(prompt + result);
-        }
-        stdout.write("\n");
-
-        stdin.setRawMode(false);
+        // Clean up
         stdin.removeListener("keypress", onKeypress);
+        if (stdin.isTTY) {
+          stdin.setRawMode(false);
+        }
+
+        // Just clear any suggestions below and add newline
+        // The prompt and input are already displayed on screen
+        stdout.write("\x1b[J"); // Clear from cursor to end of screen (clears suggestions)
+        stdout.write("\n"); // Move to next line
 
         resolve(result);
         return;
@@ -1025,12 +990,28 @@ async function readLineWithAutocomplete(
         }
       }
 
+      // Escape - cancel suggestion navigation and restore original input
+      if (key.name === "escape") {
+        if (completionMode && originalInput) {
+          input = originalInput;
+          suggestions = [];
+          pathCompletions = [];
+          completionMode = null;
+          selectedIndex = -1;
+          originalInput = "";
+          redraw();
+        }
+        return;
+      }
+
       if (key.name === "backspace") {
         // Command+Delete (macOS) - clear entire line
         if (key.meta) {
           input = "";
           pathCompletions = [];
           completionMode = null;
+          selectedIndex = -1;
+          originalInput = "";
           updateSuggestions();
           redraw();
           return;
@@ -1040,6 +1021,8 @@ async function readLineWithAutocomplete(
           input = input.slice(0, -1);
           pathCompletions = [];
           completionMode = null;
+          selectedIndex = -1;
+          originalInput = "";
           updateSuggestions();
           redraw();
         }
@@ -1051,6 +1034,8 @@ async function readLineWithAutocomplete(
         input = "";
         pathCompletions = [];
         completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
         updateSuggestions();
         redraw();
         return;
@@ -1061,24 +1046,62 @@ async function readLineWithAutocomplete(
         input = "";
         pathCompletions = [];
         completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
         updateSuggestions();
         redraw();
         return;
       }
 
       if (key.name === "up") {
-        const maxItems = completionMode === "meta" ? suggestions.length : pathCompletions.length;
-        if (maxItems > 0) {
-          selectedIndex = selectedIndex <= 0 ? maxItems - 1 : selectedIndex - 1;
+        if (completionMode === "meta" && suggestions.length > 0) {
+          // Navigate up through meta suggestions
+          if (selectedIndex === -1) {
+            selectedIndex = suggestions.length - 1;
+          } else {
+            selectedIndex = selectedIndex <= 0 ? suggestions.length - 1 : selectedIndex - 1;
+          }
+          // Update input to show the selected suggestion
+          input = suggestions[selectedIndex].command;
+          redraw();
+        } else if (completionMode === "path" && pathCompletions.length > 0) {
+          // Navigate up through path completions
+          if (selectedIndex === -1) {
+            selectedIndex = pathCompletions.length - 1;
+          } else {
+            selectedIndex = selectedIndex <= 0 ? pathCompletions.length - 1 : selectedIndex - 1;
+          }
+          // Update input to show the selected completion
+          const words = originalInput.split(/\s+/);
+          words[words.length - 1] = pathCompletions[selectedIndex];
+          input = words.join(" ");
           redraw();
         }
         return;
       }
 
       if (key.name === "down") {
-        const maxItems = completionMode === "meta" ? suggestions.length : pathCompletions.length;
-        if (maxItems > 0) {
-          selectedIndex = selectedIndex >= maxItems - 1 ? 0 : selectedIndex + 1;
+        if (completionMode === "meta" && suggestions.length > 0) {
+          // Navigate down through meta suggestions
+          if (selectedIndex === -1) {
+            selectedIndex = 0;
+          } else {
+            selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          }
+          // Update input to show the selected suggestion
+          input = suggestions[selectedIndex].command;
+          redraw();
+        } else if (completionMode === "path" && pathCompletions.length > 0) {
+          // Navigate down through path completions
+          if (selectedIndex === -1) {
+            selectedIndex = 0;
+          } else {
+            selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+          }
+          // Update input to show the selected completion
+          const words = originalInput.split(/\s+/);
+          words[words.length - 1] = pathCompletions[selectedIndex];
+          input = words.join(" ");
           redraw();
         }
         return;
@@ -1086,22 +1109,38 @@ async function readLineWithAutocomplete(
 
       if (key.name === "tab") {
         if (completionMode === "meta" && suggestions.length > 0) {
-          selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          // Cycle through meta suggestions
+          if (selectedIndex === -1) {
+            selectedIndex = 0;
+          } else {
+            selectedIndex = selectedIndex >= suggestions.length - 1 ? 0 : selectedIndex + 1;
+          }
+          // Update input to show the selected suggestion
+          input = suggestions[selectedIndex].command;
           redraw();
         } else if (completionMode === "path" && pathCompletions.length > 0) {
           if (pathCompletions.length === 1) {
-            // Single match - auto-complete
-            const words = input.split(/\s+/);
+            // Single match - auto-complete and clear suggestions
+            const words = originalInput.split(/\s+/);
             words[words.length - 1] = pathCompletions[0];
             input = words.join(" ");
             pathCompletions = [];
             completionMode = null;
             selectedIndex = -1;
+            originalInput = "";
             updateSuggestions();
             redraw();
           } else {
             // Multiple matches - cycle through
-            selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+            if (selectedIndex === -1) {
+              selectedIndex = 0;
+            } else {
+              selectedIndex = selectedIndex >= pathCompletions.length - 1 ? 0 : selectedIndex + 1;
+            }
+            // Update input to show the selected completion
+            const words = originalInput.split(/\s+/);
+            words[words.length - 1] = pathCompletions[selectedIndex];
+            input = words.join(" ");
             redraw();
           }
         } else {
@@ -1115,9 +1154,11 @@ async function readLineWithAutocomplete(
       // Regular character input
       if (str && !key.ctrl && !key.meta) {
         input += str;
-        // Clear path completions when typing
+        // Clear completions state when typing
         pathCompletions = [];
         completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
         updateSuggestions();
         redraw();
       }
