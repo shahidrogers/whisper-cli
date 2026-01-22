@@ -21,7 +21,20 @@ A natural language terminal assistant that converts your intentions into safe sh
 - macOS or Linux
 - [OpenRouter API key](https://openrouter.ai/) (free tier available)
 
-### Install Globally
+### Quick Install (Recommended)
+
+```bash
+# Clone and install with one command
+git clone https://github.com/shahidrogers/whisper-cli
+cd whisper-cli
+./install.sh
+```
+
+That's it! Now you can run `whisper` from any directory.
+
+### Manual Installation
+
+If you prefer to install manually:
 
 ```bash
 # Clone the repository
@@ -38,9 +51,7 @@ bun run build
 npm link
 ```
 
-Now you can run `whisper` from any directory!
-
-### Alternative: Run Locally
+### Run Locally (Without Global Install)
 
 If you prefer not to install globally:
 
