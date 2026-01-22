@@ -1,0 +1,39 @@
+{
+  "name": "whisper-cli",
+  "version": "0.1.0",
+  "description": "Natural language terminal assistant that converts speech to safe shell commands",
+  "type": "module",
+  "bin": {
+    "whisper": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "cli",
+    "terminal",
+    "assistant",
+    "ai",
+    "shell",
+    "natural-language"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}
