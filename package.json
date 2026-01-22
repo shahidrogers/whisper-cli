@@ -1,6 +1,6 @@
 {
   "name": "@shahidrogers/whisper-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Natural language terminal assistant that converts your intentions into safe shell commands",
   "type": "module",
   "bin": {

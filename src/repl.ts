@@ -83,6 +83,29 @@ function wrapWords(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
+function getWrappedLineCount(length: number, width: number): number {
+  if (width <= 0) return 1;
+  if (length === 0) return 1;
+  return Math.floor(length / width) + 1;
+}
+
+function moveCursorToInputEnd(
+  stdout: NodeJS.WriteStream,
+  prompt: string,
+  input: string
+): void {
+  const width = stdout.columns || 80;
+  const total = visibleLength(prompt) + input.length;
+  const rows = Math.floor(total / width);
+  const col = total % width;
+  // Restore to prompt start, then move down to the input end.
+  stdout.write("\x1b8");
+  if (rows > 0) {
+    stdout.write(`\x1b[${rows}E`);
+  }
+  readline.cursorTo(stdout, col);
+}
+
 function enterAltScreen(stdout: NodeJS.WriteStream): boolean {
   if (!stdout.isTTY) return false;
   const term = process.env.TERM ?? "";
@@ -830,30 +853,40 @@ async function readLineWithAutocomplete(
     let pathCompletions: string[] = [];
     let completionMode: "meta" | "path" | null = null;
     let suggestionsVisible = false;
+    let isRedrawing = false; // Prevent concurrent redraws
+    let pendingRedraw = false; // Coalesce redraws while typing fast
 
     const stdin = process.stdin;
     const stdout = process.stdout;
 
-    // Show prompt
+    // Show prompt initially and save cursor position at prompt start.
+    stdout.write("\x1b7");
     stdout.write(prompt);
 
-    const redraw = () => {
-      if (stdin.isTTY) {
-        stdin.setRawMode(false);
-      }
-      // Move to start of line and clear everything from there
-      stdout.write("\r"); // Carriage return to beginning of line
-      stdout.write("\x1b[K"); // Clear from cursor to end of line
-      stdout.write("\x1b[J"); // Clear from cursor to end of screen
+    let lastInputLength = 0;
 
-      // Redraw prompt and input
+    const redraw = () => {
+      // Prevent concurrent redraws
+      if (isRedrawing) {
+        pendingRedraw = true;
+        return;
+      }
+      isRedrawing = true;
+
+      // Restore to prompt start, clear below, and redraw input.
+      stdout.write("\x1b8");
+      stdout.write("\x1b[J");
+      // Save prompt anchor before reprinting.
+      stdout.write("\x1b7");
       stdout.write(prompt + input);
+
+      // Remember length for next time
+      lastInputLength = input.length;
 
       // Show suggestions if any
       suggestionsVisible = false;
       if (completionMode === "meta" && suggestions.length > 0) {
         suggestionsVisible = true;
-        stdout.write("\x1b[s");
         stdout.write("\n");
         stdout.write(`${colors.dim}${'─'.repeat(70)}${colors.reset}\n`);
         suggestions.forEach((item, idx) => {
@@ -867,10 +900,9 @@ async function readLineWithAutocomplete(
           }
         });
         stdout.write(`\n${colors.dim}${'─'.repeat(70)}${colors.reset}`);
-        stdout.write("\x1b[u");
+        moveCursorToInputEnd(stdout, prompt, input);
       } else if (completionMode === "path" && pathCompletions.length > 0) {
         suggestionsVisible = true;
-        stdout.write("\x1b[s");
         stdout.write("\n");
         const maxDisplay = Math.min(pathCompletions.length, 10);
         for (let i = 0; i < maxDisplay; i++) {
@@ -887,10 +919,13 @@ async function readLineWithAutocomplete(
         if (pathCompletions.length > maxDisplay) {
           stdout.write(`\n${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         }
-        stdout.write("\x1b[u");
+        moveCursorToInputEnd(stdout, prompt, input);
       }
-      if (stdin.isTTY) {
-        stdin.setRawMode(true);
+
+      isRedrawing = false;
+      if (pendingRedraw) {
+        pendingRedraw = false;
+        redraw();
       }
     };
 
@@ -1012,6 +1047,7 @@ async function readLineWithAutocomplete(
           completionMode = null;
           selectedIndex = -1;
           originalInput = "";
+          lastNumLines = 1; // Reset line tracking
           updateSuggestions();
           redraw();
           return;
@@ -1026,6 +1062,18 @@ async function readLineWithAutocomplete(
           updateSuggestions();
           redraw();
         }
+        return;
+      }
+
+      // CMD+Delete (forward delete) - clear entire line
+      if (key.name === "delete" && key.meta) {
+        input = "";
+        pathCompletions = [];
+        completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
+        updateSuggestions();
+        redraw();
         return;
       }
 
@@ -1431,9 +1479,12 @@ export async function startRepl(initialConfig: WhisperConfig): Promise<void> {
           cancelled = true;
           abortController.abort();
           spinner.stop();
-          stdin.setRawMode(false);
+          if (stdin.isTTY && stdin.setRawMode) {
+            stdin.setRawMode(false);
+          }
           stdin.removeListener("keypress", onKeypress);
-          console.log(`${colors.yellow}Cancelled${colors.reset}\n`);
+          // Print with newline to ensure next prompt is on fresh line
+          process.stdout.write(`${colors.yellow}Cancelled${colors.reset}\n`);
         }
       };
 
