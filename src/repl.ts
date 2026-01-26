@@ -1304,11 +1304,21 @@ export async function startRepl(initialConfig: WhisperConfig): Promise<void> {
     const firstWord = words[0];
 
     // Check if this looks like natural language that needs LLM context
-    // Words like "it", "that", "this", "them" indicate reference to previous context
-    const naturalLanguagePronouns = ['it', 'that', 'this', 'them', 'those', 'these', 'here', 'there'];
-    const hasNaturalLanguage = words.slice(1).some(word =>
-      naturalLanguagePronouns.includes(word.toLowerCase())
-    );
+    // Check for various natural language indicators
+    const naturalLanguageIndicators = [
+      // Pronouns and demonstratives
+      'it', 'that', 'this', 'them', 'those', 'these', 'here', 'there',
+      // Question words
+      'what', 'whatever', 'which', 'whichever', 'where', 'when', 'why', 'how', 'who',
+      // Natural language phrases
+      'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'running', 'using', 'listening', 'serving'
+    ];
+
+    const restOfInput = words.slice(1).map(w => w.toLowerCase());
+    const hasNaturalLanguage = restOfInput.some(word =>
+      naturalLanguageIndicators.includes(word)
+    ) || restOfInput.join(' ').includes("'s"); // Check for contractions like "what's"
 
     const isDirectCommand = commonCommands.includes(firstWord) && !hasNaturalLanguage;
 

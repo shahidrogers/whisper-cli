@@ -4943,7 +4943,7 @@ function listModels(currentModelId) {
 // package.json
 var package_default = {
   name: "@shahidrogers/whisper-cli",
-  version: "0.2.0",
+  version: "0.2.1",
   description: "Natural language terminal assistant that converts your intentions into safe shell commands",
   type: "module",
   bin: {
@@ -5047,6 +5047,17 @@ function wrapWords(text, width) {
   if (current)
     lines.push(current);
   return lines.length > 0 ? lines : [""];
+}
+function moveCursorToInputEnd(stdout, prompt, input) {
+  const width = stdout.columns || 80;
+  const total = visibleLength(prompt) + input.length;
+  const rows = Math.floor(total / width);
+  const col = total % width;
+  stdout.write("\x1B8");
+  if (rows > 0) {
+    stdout.write(`\x1B[${rows}E`);
+  }
+  readline.cursorTo(stdout, col);
 }
 function enterAltScreen(stdout) {
   if (!stdout.isTTY)
@@ -5662,21 +5673,27 @@ async function readLineWithAutocomplete(prompt, rl) {
     let pathCompletions = [];
     let completionMode = null;
     let suggestionsVisible = false;
+    let isRedrawing = false;
+    let pendingRedraw = false;
     const stdin = process.stdin;
     const stdout = process.stdout;
+    stdout.write("\x1B7");
     stdout.write(prompt);
+    let lastInputLength = 0;
     const redraw = () => {
-      if (stdin.isTTY) {
-        stdin.setRawMode(false);
+      if (isRedrawing) {
+        pendingRedraw = true;
+        return;
       }
-      stdout.write("\r");
-      stdout.write("\x1B[K");
+      isRedrawing = true;
+      stdout.write("\x1B8");
       stdout.write("\x1B[J");
+      stdout.write("\x1B7");
       stdout.write(prompt + input);
+      lastInputLength = input.length;
       suggestionsVisible = false;
       if (completionMode === "meta" && suggestions.length > 0) {
         suggestionsVisible = true;
-        stdout.write("\x1B[s");
         stdout.write(`
 `);
         stdout.write(`${colors.dim}${"\u2500".repeat(70)}${colors.reset}
@@ -5694,10 +5711,9 @@ async function readLineWithAutocomplete(prompt, rl) {
         });
         stdout.write(`
 ${colors.dim}${"\u2500".repeat(70)}${colors.reset}`);
-        stdout.write("\x1B[u");
+        moveCursorToInputEnd(stdout, prompt, input);
       } else if (completionMode === "path" && pathCompletions.length > 0) {
         suggestionsVisible = true;
-        stdout.write("\x1B[s");
         stdout.write(`
 `);
         const maxDisplay = Math.min(pathCompletions.length, 10);
@@ -5717,10 +5733,12 @@ ${colors.dim}${"\u2500".repeat(70)}${colors.reset}`);
           stdout.write(`
 ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
         }
-        stdout.write("\x1B[u");
+        moveCursorToInputEnd(stdout, prompt, input);
       }
-      if (stdin.isTTY) {
-        stdin.setRawMode(true);
+      isRedrawing = false;
+      if (pendingRedraw) {
+        pendingRedraw = false;
+        redraw();
       }
     };
     const updateSuggestions = () => {
@@ -5819,6 +5837,7 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
           completionMode = null;
           selectedIndex = -1;
           originalInput = "";
+          lastNumLines = 1;
           updateSuggestions();
           redraw();
           return;
@@ -5832,6 +5851,16 @@ ${colors.dim}  ... ${pathCompletions.length - maxDisplay} more${colors.reset}`);
           updateSuggestions();
           redraw();
         }
+        return;
+      }
+      if (key.name === "delete" && key.meta) {
+        input = "";
+        pathCompletions = [];
+        completionMode = null;
+        selectedIndex = -1;
+        originalInput = "";
+        updateSuggestions();
+        redraw();
         return;
       }
       if (key.ctrl && key.name === "u") {
@@ -6056,8 +6085,38 @@ ${colors.yellow}Arm mode expired${colors.reset}
     ];
     const words = userInput.trim().split(/\s+/);
     const firstWord = words[0];
-    const naturalLanguagePronouns = ["it", "that", "this", "them", "those", "these", "here", "there"];
-    const hasNaturalLanguage = words.slice(1).some((word) => naturalLanguagePronouns.includes(word.toLowerCase()));
+    const naturalLanguageIndicators = [
+      "it",
+      "that",
+      "this",
+      "them",
+      "those",
+      "these",
+      "here",
+      "there",
+      "what",
+      "whatever",
+      "which",
+      "whichever",
+      "where",
+      "when",
+      "why",
+      "how",
+      "who",
+      "is",
+      "are",
+      "was",
+      "were",
+      "be",
+      "been",
+      "being",
+      "running",
+      "using",
+      "listening",
+      "serving"
+    ];
+    const restOfInput = words.slice(1).map((w) => w.toLowerCase());
+    const hasNaturalLanguage = restOfInput.some((word) => naturalLanguageIndicators.includes(word)) || restOfInput.join(" ").includes("'s");
     const isDirectCommand = commonCommands.includes(firstWord) && !hasNaturalLanguage;
     if (firstWord === "cd") {
       const args = userInput.trim().split(/\s+/).slice(1);
@@ -6195,9 +6254,11 @@ ${colors.red}\u2717 Blocked:${colors.reset} ${policy.reason}`);
           cancelled = true;
           abortController.abort();
           spinner.stop();
-          stdin.setRawMode(false);
+          if (stdin.isTTY && stdin.setRawMode) {
+            stdin.setRawMode(false);
+          }
           stdin.removeListener("keypress", onKeypress);
-          console.log(`${colors.yellow}Cancelled${colors.reset}
+          process.stdout.write(`${colors.yellow}Cancelled${colors.reset}
 `);
         }
       };
